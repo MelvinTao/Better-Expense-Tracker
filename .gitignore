@@ -1,0 +1,20 @@
+# Xcode build output
+build/
+DerivedData/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+
+# Xcode user-specific settings
+xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# CocoaPods (if ever used)
+Pods/
+Podfile.lock
+
+# macOS
+.DS_Store
