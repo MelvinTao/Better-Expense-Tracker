@@ -74,8 +74,10 @@ struct ContentView: View {
                 switch selectedTab {
                 case 0: HomeView()          // If selectedTab == 0, show HomeView
                 case 1: TransactionsView()  // If selectedTab == 1, show TransactionsView
-                case 2: AnalysisView()      // If selectedTab == 2, show AnalysisView
-                case 3: SettingView()       // If selectedTab == 3, show SettingView
+                case 2: ProjectView()
+                case 3: AnalysisView()      // If selectedTab == 3, show AnalysisView
+                case 4: SettingView()       // If selectedTab == 4, show SettingView
+                
                 default: HomeView()         // Fallback — Swift requires a 'default' case
                 }
             }
@@ -101,8 +103,11 @@ struct ContentView: View {
                 //   selected — a binding to selectedTab so the button can update it
                 TabBarButton(icon: "dollarsign.bank.building.fill", label: "Home",         tag: 0, selected: $selectedTab)
                 TabBarButton(icon: "calendar",                       label: "Transactions", tag: 1, selected: $selectedTab)
-                TabBarButton(icon: "chart.line.text.clipboard.fill", label: "Analysis",    tag: 2, selected: $selectedTab)
-                TabBarButton(icon: "gearshape.fill",                 label: "Setting",     tag: 3, selected: $selectedTab)
+                TabBarButton(icon: "folder.fill",
+                             label: "Projects",
+                             tag: 2, selected: $selectedTab)
+                TabBarButton(icon: "chart.line.text.clipboard.fill", label: "Analysis",    tag: 3, selected: $selectedTab)
+                TabBarButton(icon: "gearshape.fill",                 label: "Setting",     tag: 4, selected: $selectedTab)
             }
             // Sets the tab bar to exactly your defined height.
             .frame(height: tabBarHeight)
