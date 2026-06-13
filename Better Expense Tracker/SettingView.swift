@@ -1,16 +1,17 @@
-//
-//  Setting.swift
-//  Better Expense Tracker
-//
-//  Created by Melvin Tao on 2026-05-31.
-//
-
 import SwiftUI
 
 struct SettingView: View {
+    @AppStorage(AppStorageKeys.timeFormatIs24hr) private var is24hr = false
+
     var body: some View {
-        Text(/*@START_MENU_TOKEN@*/"Hello, World!"/*@END_MENU_TOKEN@*/)
-            .font(.title)
+        NavigationStack {
+            Form {
+                Section("Display") {
+                    Toggle("24-Hour Time", isOn: $is24hr)
+                }
+            }
+            .navigationTitle("Settings")
+        }
     }
 }
 

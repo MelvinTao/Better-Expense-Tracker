@@ -22,7 +22,7 @@ struct CategoryButton: View {
     let categorySymbol: String
     let currencySymbol: CurrencySymbol
     let categoryAmount: Double
-    var backgroundColor: CategoryColor     // now uses the top-level CategoryColor enum
+    var backgroundColor: CategoryColor
     var transitionColor: Color
     let tileWidth: CGFloat
     let tileHeight: CGFloat
@@ -64,45 +64,21 @@ struct CategoryButton: View {
     var body: some View {
         // ZStack lets us overlay the delete X badge on top of the tile corner
         ZStack(alignment: .topTrailing) {
-            Button {} label: {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 15)
-                        .fill(backgroundColor.color)
-                        .frame(width: tileWidth, height: tileHeight)
-                        .shadow(color: backgroundColor.transitionColor, radius: 5)
-
-                    Circle()
-                        .fill(backgroundColor.transitionColor)
-                        .frame(width: tileWidth * 0.4, height: tileWidth * 0.4)
-                        .shadow(color: backgroundColor.transitionColor, radius: 15)
-
-                    VStack {
-                        Text(categoryName)
-                            .font(.system(size: tileWidth * 0.16, design: .rounded))
-                            .foregroundColor(Color.primary)
-                        Spacer()
-                        Image(systemName: categorySymbol)
-                            .font(.system(size: tileWidth * 0.22))
-                            .foregroundColor(colorScheme == .dark ? .black : .white)
-                        Spacer()
-                        Text("\(currencySymbol.symbol)\(categoryAmount, specifier: "%.2f")")
-                            .font(.system(size: tileWidth * 0.16, design: .rounded))
-                            .foregroundColor(Color.primary)
-                            .bold()
-                    }
-                    .frame(width: tileWidth, height: tileHeight * 0.85)
-                }
+            tileBody
                 .frame(width: tileWidth, height: tileHeight)
-                .scaleEffect(isPressed ? 0.95 : 1.0)
-                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isPressed)
-            }
-            .buttonStyle(.plain)
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.5)
-                    .onChanged { _ in isPressed = true }
-                    .onEnded { _ in isPressed = false; onLongPress() }
-            )
-            .simultaneousGesture(TapGesture().onEnded { onTap() })
+                // In edit mode the parent (CategorySection) owns the gesture, so
+                // we use a plain gesture-free content area. Outside edit mode,
+                // use a tap + long-press to open/enter edit.
+                .contentShape(Rectangle())
+                .onTapGesture { onTap() }
+                .onLongPressGesture(minimumDuration: 0.45) {
+                    isPressed = false
+                    onLongPress()
+                } onPressingChanged: { pressing in
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                        isPressed = pressing && !editMode
+                    }
+                }
 
             // Red X badge — only visible when edit mode is active
             if editMode {
@@ -115,6 +91,38 @@ struct CategoryButton: View {
                 .buttonStyle(.plain)
                 .offset(x: 6, y: -6)
             }
+        }
+        .scaleEffect(isPressed ? 0.95 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isPressed)
+    }
+
+    private var tileBody: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 15)
+                .fill(backgroundColor.color)
+                .frame(width: tileWidth, height: tileHeight)
+                .shadow(color: backgroundColor.transitionColor, radius: 5)
+
+            Circle()
+                .fill(backgroundColor.transitionColor)
+                .frame(width: tileWidth * 0.4, height: tileWidth * 0.4)
+                .shadow(color: backgroundColor.transitionColor, radius: 15)
+
+            VStack {
+                Text(categoryName)
+                    .font(.system(size: tileWidth * 0.16, design: .rounded))
+                    .foregroundColor(Color.primary)
+                Spacer()
+                Image(systemName: categorySymbol)
+                    .font(.system(size: tileWidth * 0.22))
+                    .foregroundColor(colorScheme == .dark ? .black : .white)
+                Spacer()
+                Text("\(currencySymbol.symbol)\(categoryAmount, specifier: "%.2f")")
+                    .font(.system(size: tileWidth * 0.16, design: .rounded))
+                    .foregroundColor(Color.primary)
+                    .bold()
+            }
+            .frame(width: tileWidth, height: tileHeight * 0.85)
         }
     }
 }

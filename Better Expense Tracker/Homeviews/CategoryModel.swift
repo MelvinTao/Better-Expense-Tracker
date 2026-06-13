@@ -24,6 +24,9 @@ class CategoryModel {
     var isReusable: Bool
     var isGasoline: Bool
 
+    // Gasoline tax in cents-per-litre (stored as a plain Double, e.g. 30.0 means 30.00 ¢/L)
+    var gasolineTaxPerLiter: Double
+
     init(
         name: String,
         symbol: String = "basket.fill",
@@ -35,7 +38,8 @@ class CategoryModel {
         taxable: Bool = false,
         tippable: Bool = false,
         isReusable: Bool = false,
-        isGasoline: Bool = false
+        isGasoline: Bool = false,
+        gasolineTaxPerLiter: Double = 0.0
     ) {
         self.name = name
         self.symbol = symbol
@@ -48,6 +52,7 @@ class CategoryModel {
         self.tippable = tippable
         self.isReusable = isReusable
         self.isGasoline = isGasoline
+        self.gasolineTaxPerLiter = gasolineTaxPerLiter
     }
 
     // Convenience: converts the stored colorName string back to a CategoryColor enum value

@@ -34,12 +34,19 @@ struct AddAmountView: View {
     let defaultActiveTaxNames: [String] // pre-fills which taxes are on for this category
     let defaultTipRate: Double          // pre-fills the tip selection
 
+    // Gasoline-specific — non-nil when the category has isGasoline = true
+    var isGasoline: Bool = false
+    var categoryTaxPerLiter: Double = 0.0   // the ¢/L tax configured on the category
+
+    // When non-nil, the view mutates this existing transaction instead of inserting a new one
+    var editingTransaction: Transaction? = nil
+
     // Amount input stored as String so we control display exactly
     // (e.g. "12." is valid while typing — a Double would lose the trailing dot)
     @State private var inputString = "0"
     @State private var noteText = ""
     @State private var selectedDate = Date.now
-    @State private var projectCode = ""
+    @State private var projectCodes: [String] = []
 
     // Tax state
     @State private var activeTaxRates: [StoredTaxRate] = []
@@ -52,6 +59,11 @@ struct AddAmountView: View {
     // UI
     @State private var showDatePicker = false
     @State private var showProjectCodeInput = false
+    @State private var newCodeInputText = ""
+
+    // Gasoline price-per-liter slider (range: 100.99 – 300.99, step 1.00)
+    // Stored value is the integer whole-cent part (e.g. 189 → 189.99 ¢/L)
+    @State private var gasolinePriceStep: Double = 89   // default: 189.99
 
     // Persisted lists — same AppStorage key = AddAmountView and AddCategoryView share the same data
     @AppStorage("availableTaxRatesJSON") private var availableTaxRatesJSON = ""
@@ -60,6 +72,13 @@ struct AddAmountView: View {
     // MARK: Computed
 
     var inputValue: Double { Double(inputString) ?? 0 }
+
+    // Gasoline price: step (0–200) maps to 100.99–300.99 ¢/L
+    // e.g. step 89 → 189.99, step 0 → 100.99, step 200 → 300.99
+    var gasolinePricePerLiter: Double { gasolinePriceStep + 100.99 }
+
+    // AppStorage key is per-category so each gasoline category remembers its own last price
+    var gasolinePriceStorageKey: String { "gasolinePrice_\(categoryName)" }
 
     // Splits the display into (typed, ghost) for two-colour rendering.
     // "typed" is black (primary), "ghost" is the unfilled placeholder in grey (secondary).
@@ -161,6 +180,25 @@ struct AddAmountView: View {
                         }
                     }
                 }
+
+                // Gasoline live breakdown — liters filled and gas tax for this top-up
+                if isGasoline && inputValue > 0 && gasolinePricePerLiter > 0 {
+                    let liters = inputValue / (gasolinePricePerLiter / 100.0)
+                    let gasTax = liters * (categoryTaxPerLiter / 100.0)
+                    HStack(spacing: 20) {
+                        VStack(spacing: 1) {
+                            Text("Liters").font(.caption2).foregroundColor(.secondary)
+                            Text(String(format: "%.2f L", liters))
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                        VStack(spacing: 1) {
+                            Text("Gas tax").font(.caption2).foregroundColor(.secondary)
+                            Text(String(format: "$%.2f", gasTax))
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.top, 2)
+                }
             }
             .padding(.bottom, 8)
 
@@ -173,14 +211,65 @@ struct AddAmountView: View {
             }
             .padding(.horizontal, 24).padding(.vertical, 6)
 
-            // Project code badge (shown only after one is entered)
-            if !projectCode.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "folder.fill").font(.caption).foregroundColor(.secondary)
-                    Text(projectCode).font(.caption).foregroundColor(.secondary)
-                    Spacer()
-                    Button { projectCode = "" } label: {
-                        Image(systemName: "xmark.circle.fill").font(.caption).foregroundColor(.secondary)
+            // Gasoline price-per-liter slider — only shown for gasoline categories
+            if isGasoline {
+                VStack(spacing: 8) {
+                    Text(String(format: "$%.2f ¢/L", gasolinePricePerLiter))
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+
+                    Slider(value: $gasolinePriceStep, in: 0...200, step: 1)
+                        .accentColor(categoryColor.color)
+                        .padding(.horizontal, 24)
+
+                    HStack {
+                        // Minus button: decrease by 1.00
+                        Button {
+                            gasolinePriceStep = max(0, gasolinePriceStep - 1)
+                        } label: {
+                            Text("-")
+                                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                                .frame(maxWidth: .infinity).frame(height: 48)
+                                .background(categoryColor.color.opacity(0.85))
+                                .foregroundColor(.primary)
+                                .cornerRadius(12)
+                        }
+                        .buttonStyle(.plain)
+
+                        // Plus button: increase by 1.00
+                        Button {
+                            gasolinePriceStep = min(200, gasolinePriceStep + 1)
+                        } label: {
+                            Text("+")
+                                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                                .frame(maxWidth: .infinity).frame(height: 48)
+                                .background(categoryColor.color.opacity(0.85))
+                                .foregroundColor(.primary)
+                                .cornerRadius(12)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 24)
+                }
+                .padding(.bottom, 8)
+            }
+
+            // Project code chips (shown when at least one code exists)
+            if !projectCodes.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(projectCodes, id: \.self) { code in
+                            HStack(spacing: 4) {
+                                Image(systemName: "folder.fill").font(.caption2)
+                                Text(code).font(.caption)
+                                Button { projectCodes.removeAll { $0 == code } } label: {
+                                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                                }
+                            }
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Color.secondary.opacity(0.12))
+                            .clipShape(Capsule())
+                        }
                     }
                 }
                 .padding(.horizontal, 24).padding(.vertical, 2)
@@ -259,7 +348,33 @@ struct AddAmountView: View {
         }
         .onAppear {
             seedDefaultRatesIfNeeded()
-            applyDefaultsFromCategory()
+            // Load persisted gasoline price for this category
+            if isGasoline {
+                let stored = UserDefaults.standard.double(forKey: gasolinePriceStorageKey)
+                if stored > 0 {
+                    // Convert back from stored price (e.g. 189.99) to step (89)
+                    gasolinePriceStep = max(0, min(200, (stored - 100.99).rounded()))
+                }
+            }
+            if let tx = editingTransaction {
+                // Pre-fill from existing transaction
+                inputString = String(format: "%.2f", tx.amount)
+                    .replacingOccurrences(of: "\\.?0+$", with: "", options: .regularExpression)
+                    .replacingOccurrences(of: "^0+(?=[1-9])", with: "", options: .regularExpression)
+                // Use plain string if it ends up empty
+                if inputString.isEmpty { inputString = "0" }
+                noteText = tx.title == tx.categoryName ? "" : tx.title
+                selectedDate = tx.date
+                projectCodes = tx.projectCodes
+                activeTaxRates = tx.taxRates.map { StoredTaxRate(name: $0.name, rate: $0.rate) }
+                selectedTipRate = tx.selectedTipRate
+                // Restore gasoline price from the transaction if editing
+                if tx.gasoline && tx.pricePerLiter > 0 {
+                    gasolinePriceStep = max(0, min(200, (tx.pricePerLiter - 100.99).rounded()))
+                }
+            } else {
+                applyDefaultsFromCategory()
+            }
         }
         .sheet(isPresented: $showDatePicker) {
             DatePickerSheet(selectedDate: $selectedDate, accentColor: categoryColor.color)
@@ -273,11 +388,16 @@ struct AddAmountView: View {
             TipEditorView(selectedTipRate: $selectedTipRate, accentColor: categoryColor.color)
                 .presentationDetents([.large])
         }
-        .alert("Project Code", isPresented: $showProjectCodeInput) {
-            TextField("e.g. PROJ-2026-A", text: $projectCode)
-            Button("Done") {}
-            Button("Clear", role: .destructive) { projectCode = "" }
-            Button("Cancel", role: .cancel) {}
+        .alert("Add Project Code", isPresented: $showProjectCodeInput) {
+            TextField("e.g. PROJ-2026-A", text: $newCodeInputText)
+            Button("Add") {
+                let trimmed = newCodeInputText.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty && !projectCodes.contains(trimmed) {
+                    projectCodes.append(trimmed)
+                }
+                newCodeInputText = ""
+            }
+            Button("Cancel", role: .cancel) { newCodeInputText = "" }
         }
     }
 
@@ -323,22 +443,143 @@ struct AddAmountView: View {
         let tipRates = (try? JSONDecoder().decode([Double].self,
             from: availableTipRatesJSON.data(using: .utf8) ?? Data())) ?? []
 
-        modelContext.insert(Transaction(
-            title:             noteText.isEmpty ? categoryName : noteText,
-            amount:            inputValue,
-            date:              selectedDate,
-            categoryName:      categoryName,
-            categorySymbol:    categorySymbol,
-            projectCode:       projectCode.isEmpty ? nil : projectCode,
-            isIncome:          isIncome,
-            taxable:           !activeTaxRates.isEmpty,
-            taxRates:          txRates,
-            tippable:          selectedTipRate > 0,
-            availableTipRates: tipRates,
-            selectedTipRate:   selectedTipRate
-        ))
+        if let tx = editingTransaction {
+            // Mutate existing transaction in place
+            tx.title = noteText.isEmpty ? tx.categoryName : noteText
+            tx.amount = inputValue
+            tx.date = selectedDate
+            tx.projectCodes = projectCodes
+            tx.taxable = !activeTaxRates.isEmpty
+            tx.taxRates = txRates
+            tx.tippable = selectedTipRate > 0
+            tx.selectedTipRate = tippable ? selectedTipRate : 0.0
+            tx.tipAmount = tx.tippable ? tx.baseAmount * selectedTipRate : 0.0
+            tx.totalTaxAmount = txRates.reduce(0) { $0 + $1.amount }
+        } else if isGasoline {
+            saveGasolineTransaction(tipRates: tipRates)
+        } else {
+            modelContext.insert(Transaction(
+                title:             noteText.isEmpty ? categoryName : noteText,
+                amount:            inputValue,
+                date:              selectedDate,
+                categoryName:      categoryName,
+                categorySymbol:    categorySymbol,
+                projectCodes:      projectCodes,
+                isIncome:          isIncome,
+                taxable:           !activeTaxRates.isEmpty,
+                taxRates:          txRates,
+                tippable:          selectedTipRate > 0,
+                availableTipRates: tipRates,
+                selectedTipRate:   selectedTipRate
+            ))
+        }
+
+        // Persist the last-used gasoline price for this category
+        if isGasoline {
+            UserDefaults.standard.set(gasolinePricePerLiter, forKey: gasolinePriceStorageKey)
+        }
+
         dismiss()
     }
+
+    // MARK: Gasoline save logic
+    // Creates the mother transaction (which shows "X L @ YYY.99 ¢/L") plus
+    // N-1 synthetic daily split transactions, all sharing the same groupID.
+    private func saveGasolineTransaction(tipRates: [Double]) {
+        let cal = Calendar.current
+        let fillDate = selectedDate
+        let totalAmount = inputValue
+        let pricePerL = gasolinePricePerLiter          // e.g. 189.99 ¢/L
+        let taxPerL   = categoryTaxPerLiter            // e.g. 30.00 ¢/L (from category)
+
+        // Calculate liters and gasoline tax
+        let liters = pricePerL > 0 ? totalAmount / (pricePerL / 100.0) : 0.0
+        let gasTaxTotal = liters * (taxPerL / 100.0)
+
+        // Auto-note: "45.3 L @ 189.99 ¢/L"
+        let autoNote: String
+        if liters > 0 {
+            autoNote = String(format: "%.1f L @ %.2f ¢/L", liters, pricePerL)
+        } else {
+            autoNote = categoryName
+        }
+        let motherTitle = noteText.isEmpty ? autoNote : noteText
+
+        // Find the most recent prior transaction in this gasoline category
+        let descriptor = FetchDescriptor<Transaction>(
+            predicate: #Predicate { $0.categoryName == categoryName && $0.gasoline == true },
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        let prior = try? modelContext.fetch(descriptor)
+        // The most recent one that is strictly before our fill date
+        let previousFill = prior?.first(where: { $0.date < fillDate })
+        let prevDate = previousFill?.date
+
+        // Determine how many days to split across
+        let days: Int
+        if let prev = prevDate {
+            days = max(1, cal.dateComponents([.day], from: cal.startOfDay(for: prev), to: cal.startOfDay(for: fillDate)).day ?? 1)
+        } else {
+            days = 1  // first fill ever — charge all to the fill day
+        }
+
+        let dailyCost = totalAmount / Double(days)
+        let dailyTax  = gasTaxTotal / Double(days)
+
+        // Shared group ID for all entries from this fill
+        let groupID = UUID().uuidString
+
+        // Insert one transaction per day
+        for i in 0..<days {
+            // Day 0 = the day after the previous fill (or the fill day itself for a first fill)
+            // Day (days-1) = the actual fill date
+            let dayOffset = i - (days - 1)  // negative for past days, 0 for fill day
+            let txDate: Date
+            if days == 1 {
+                txDate = fillDate
+            } else {
+                // Start distributing from the day after the previous fill
+                let baseDay = cal.startOfDay(for: fillDate)
+                txDate = cal.date(byAdding: .day, value: dayOffset, to: baseDay) ?? fillDate
+            }
+
+            let isMother = (i == days - 1)  // last entry = fill day = mother
+
+            let txTitle: String
+            if isMother {
+                txTitle = motherTitle
+            } else {
+                // Daily split entries show the fill date as context
+                let fmt = DateFormatter()
+                fmt.dateFormat = "MMM d"
+                txTitle = "Fill \(fmt.string(from: fillDate))"
+            }
+
+            let tx = Transaction(
+                title:             txTitle,
+                amount:            dailyCost,
+                date:              txDate,
+                categoryName:      categoryName,
+                categorySymbol:    categorySymbol,
+                projectCodes:      isMother ? projectCodes : [],
+                isIncome:          false,
+                gasoline:          true,
+                pricePerLiter:     isMother ? pricePerL : 0.0,
+                taxPerLiter:       taxPerL,
+                previousFillupDate: prevDate,
+                groupID:           groupID,
+                isGasolineSplit:   !isMother
+            )
+            // Manually set gasoline-specific fields not computed in init
+            tx.liters = isMother ? liters : 0.0
+            tx.gasolineTaxAmount = dailyTax
+            tx.dailyGasolineCost = dailyCost
+            modelContext.insert(tx)
+        }
+    }
+
+    // Convenience: whether the transaction has tip (used during edit save)
+    private var tippable: Bool { selectedTipRate > 0 }
 }
 
 // ============================================================

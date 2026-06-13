@@ -25,12 +25,14 @@ struct AddCategoryView: View {
     @State private var selectedTipRate: Double = 0.0
     @State private var isReusable = false
     @State private var isGasoline = false
+    @State private var gasolineTaxPerLiter: Double = 0.0
 
     @State private var showSymbolPicker = false
     @State private var showColorPicker = false
     @State private var showTaxEditor = false
     @State private var showTipEditor = false
     @State private var showExtras = false
+    @State private var showGasolineTaxEditor = false
 
     @FocusState private var nameFieldFocused: Bool
     @AppStorage("availableTaxRatesJSON") private var availableTaxRatesJSON = ""
@@ -96,14 +98,32 @@ struct AddCategoryView: View {
 
             // Tax / Tip / Extras buttons
             HStack(spacing: 12) {
-                Button { showTaxEditor = true } label: {
+                // Tax button: percentage editor for normal categories,
+                // ¢/L editor for gasoline categories
+                Button {
+                    if isGasoline { showGasolineTaxEditor = true }
+                    else { showTaxEditor = true }
+                } label: {
                     VStack(spacing: 2) {
                         Text("Tax").font(.caption)
-                        Text(activeTaxRates.isEmpty ? "None" : formatRate(totalTaxRate)).font(.headline)
+                        if isGasoline {
+                            Text(gasolineTaxPerLiter > 0
+                                 ? String(format: "%.2f ¢/L", gasolineTaxPerLiter)
+                                 : "None")
+                                .font(.headline)
+                        } else {
+                            Text(activeTaxRates.isEmpty ? "None" : formatRate(totalTaxRate)).font(.headline)
+                        }
                     }
-                    .foregroundColor(activeTaxRates.isEmpty ? .primary : .white)
+                    .foregroundColor({
+                        if isGasoline { return gasolineTaxPerLiter > 0 ? Color.white : Color.primary }
+                        return activeTaxRates.isEmpty ? Color.primary : Color.white
+                    }())
                     .frame(maxWidth: .infinity).frame(height: 56)
-                    .background(activeTaxRates.isEmpty ? Color.secondary.opacity(0.12) : tileColor.color)
+                    .background({
+                        if isGasoline { return gasolineTaxPerLiter > 0 ? tileColor.color : Color.secondary.opacity(0.12) }
+                        return activeTaxRates.isEmpty ? Color.secondary.opacity(0.12) : tileColor.color
+                    }())
                     .cornerRadius(12)
                 }
                 .buttonStyle(.plain)
@@ -143,8 +163,9 @@ struct AddCategoryView: View {
                                 selectedSymbol = c.symbol
                                 selectedColor  = CategoryColor(rawValue: c.colorName)
                                 selectedTipRate = c.defaultTipRate
-                                isReusable     = c.isReusable
-                                isGasoline     = c.isGasoline
+                                isReusable          = c.isReusable
+                                isGasoline          = c.isGasoline
+                                gasolineTaxPerLiter = c.gasolineTaxPerLiter
                                 // Decode default active tax names back into StoredTaxRate objects
                                 if let data = UserDefaults.standard.string(forKey: "availableTaxRatesJSON")?.data(using: .utf8),
                                    let allRates = try? JSONDecoder().decode([StoredTaxRate].self, from: data) {
@@ -180,6 +201,10 @@ struct AddCategoryView: View {
                             ExtrasEditorView(isReusable: $isReusable, isGasoline: $isGasoline)
                                 .presentationDetents([.medium])
                         }
+                        .sheet(isPresented: $showGasolineTaxEditor) {
+                            GasolineTaxEditorView(taxPerLiter: $gasolineTaxPerLiter, accentColor: tileColor.color)
+                                .presentationDetents([.large])
+                        }
                     }
 
                     func saveCategory() {
@@ -199,10 +224,11 @@ struct AddCategoryView: View {
                             existing.colorName = color.rawValue
                             existing.defaultActiveTaxNamesJSON = taxNamesJSON
                             existing.defaultTipRate  = selectedTipRate
-                            existing.taxable         = !activeTaxRates.isEmpty
-                            existing.tippable        = selectedTipRate > 0
-                            existing.isReusable      = isReusable
-                            existing.isGasoline      = isGasoline
+                            existing.taxable              = !activeTaxRates.isEmpty
+                            existing.tippable             = selectedTipRate > 0
+                            existing.isReusable           = isReusable
+                            existing.isGasoline           = isGasoline
+                            existing.gasolineTaxPerLiter  = gasolineTaxPerLiter
                         } else {
                             // Create mode — insert a new category at the end
                             let query = FetchDescriptor<CategoryModel>(sortBy: [SortDescriptor(\.sortOrder, order: .reverse)])
@@ -219,7 +245,8 @@ struct AddCategoryView: View {
                                 taxable:                !activeTaxRates.isEmpty,
                                 tippable:               selectedTipRate > 0,
                                 isReusable:             isReusable,
-                                isGasoline:             isGasoline
+                                isGasoline:             isGasoline,
+                                gasolineTaxPerLiter:    gasolineTaxPerLiter
                             ))
                         }
                         dismiss()
@@ -447,6 +474,108 @@ struct AddCategoryView: View {
                             originalReusable = isReusable
                             originalGasoline = isGasoline
                         }
+                    }
+                }
+
+
+                // ============================================================
+                // MARK: - GasolineTaxEditorView
+                // ============================================================
+                // Lets the user input the gasoline tax in ¢/L using a numeric keypad.
+                // The value is stored as a plain Double (e.g. 30.00 means 30.00 ¢/L).
+
+                struct GasolineTaxEditorView: View {
+                    @Binding var taxPerLiter: Double
+                    let accentColor: Color
+                    @Environment(\.dismiss) var dismiss
+
+                    @State private var rateString = "0"
+
+                    var rateValue: Double { Double(rateString) ?? 0 }
+                    var canConfirm: Bool { rateValue > 0 }
+
+                    var body: some View {
+                        VStack(spacing: 0) {
+                            HStack {
+                                Button { dismiss() } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 20, weight: .medium))
+                                        .foregroundColor(.primary)
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 20).padding(.top, 20)
+
+                            // Display
+                            VStack(spacing: 4) {
+                                Text(String(format: "$%.2f ¢/L", rateValue))
+                                    .font(.system(size: 48, weight: .light, design: .rounded))
+                                    .padding(.vertical, 16)
+                                Text("Gasoline tax per litre")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Spacer()
+                            Divider()
+
+                            // Keypad (no Tax/Tip or Code keys — just digits, dot, delete, confirm)
+                            VStack(spacing: 8) {
+                                HStack(spacing: 8) {
+                                    KeypadButton(label: "7") { ri("7") }
+                                    KeypadButton(label: "8") { ri("8") }
+                                    KeypadButton(label: "9") { ri("9") }
+                                }
+                                HStack(spacing: 8) {
+                                    KeypadButton(label: "4") { ri("4") }
+                                    KeypadButton(label: "5") { ri("5") }
+                                    KeypadButton(label: "6") { ri("6") }
+                                }
+                                HStack(spacing: 8) {
+                                    KeypadButton(label: "1") { ri("1") }
+                                    KeypadButton(label: "2") { ri("2") }
+                                    KeypadButton(label: "3") { ri("3") }
+                                }
+                                HStack(spacing: 8) {
+                                    KeypadButton(label: ".", isSpecial: false) { ri(".") }
+                                    KeypadButton(label: "0") { ri("0") }
+                                    KeypadButton(label: "delete", isSpecial: true, fontSize: 20,
+                                                 fontWeight: .medium, systemImage: "delete.backward") { rd() }
+                                }
+                                Button { confirm() } label: {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 20, weight: .semibold))
+                                        .foregroundColor(.white)
+                                        .frame(maxWidth: .infinity).frame(height: 52)
+                                        .background(canConfirm ? accentColor : Color.gray.opacity(0.4))
+                                        .cornerRadius(12)
+                                }
+                                .buttonStyle(.plain).disabled(!canConfirm)
+                            }
+                            .padding(12)
+                        }
+                        .onAppear {
+                            // Pre-fill with the current value if already set
+                            if taxPerLiter > 0 {
+                                rateString = String(format: "%.2f", taxPerLiter)
+                                    .replacingOccurrences(of: "\\.?0+$", with: "", options: .regularExpression)
+                                if rateString.isEmpty { rateString = "0" }
+                            }
+                        }
+                    }
+
+                    func ri(_ key: String) {
+                        if key == "." && rateString.contains(".") { return }
+                        if let di = rateString.firstIndex(of: "."),
+                           rateString.distance(from: di, to: rateString.endIndex) - 1 >= 2 { return }
+                        if rateString == "0" && key != "." { rateString = key } else { rateString += key }
+                    }
+
+                    func rd() { if rateString.count > 1 { rateString.removeLast() } else { rateString = "0" } }
+
+                    func confirm() {
+                        taxPerLiter = rateValue
+                        dismiss()
                     }
                 }
 

@@ -1,8 +1,16 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 @main
 struct BetterExpenseTrackerApp: App {
+    init() {
+        UITableView.appearance().separatorStyle = .none
+        UITableView.appearance().layer.shadowOpacity = 0
+        UITableViewCell.appearance().layer.shadowOpacity = 0
+        UITableViewCell.appearance().layer.masksToBounds = true
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

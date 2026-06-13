@@ -11,6 +11,10 @@ struct HomeView: View {
     // Edit mode: when true, X badges and + tiles appear
     @State private var editMode = false
 
+    // True while a tile is being dragged — used to freeze the ScrollView so it
+    // doesn't fight the reorder gesture.
+    @State private var isReordering = false
+
     // Which category tile was tapped (opens AddAmountView)
     @State private var selectedCategory: CategoryModel? = nil
 
@@ -23,17 +27,31 @@ struct HomeView: View {
     // Which section's + was tapped (nil = not adding, true = outcome, false = income)
     @State private var addingCategoryIsOutcome: Bool? = nil
 
+    // Month navigator — start of the currently displayed month
+    @State private var selectedMonth: Date = Calendar.current.startOfMonth(for: Date())
+
+    // Controls the year-month picker sheet
+    @State private var showMonthPicker = false
+
     // Prevents seeding default categories more than once
     @AppStorage("hasSeededCategories") private var hasSeededCategories = false
 
     let padding: CGFloat = 16
-    let spacing: CGFloat = 12
+    let spacing: CGFloat = 16
     let minTileWidth: CGFloat = 90
     let maxTileWidth: CGFloat = 160
 
     // Split categories into the two groups
     var outcomeCategories: [CategoryModel] { categories.filter { $0.isOutcome } }
     var incomeCategories:  [CategoryModel] { categories.filter { !$0.isOutcome } }
+
+    // Transactions filtered to the selected month
+    var monthTransactions: [Transaction] {
+        let cal = Calendar.current
+        let start = selectedMonth
+        let end = cal.date(byAdding: .month, value: 1, to: start) ?? start
+        return transactions.filter { $0.date >= start && $0.date < end }
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -45,16 +63,28 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
 
+                    // Month navigator bar — hidden while in edit mode
+                    if !editMode {
+                        MonthNavigatorBar(
+                            selectedMonth: $selectedMonth,
+                            showMonthPicker: $showMonthPicker
+                        )
+                        .padding(.horizontal, 4)
+                        .padding(.bottom, -24)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
                     // Outcome section (spending categories)
                     CategorySection(
-                        title: "Outcome",
+                        title: "Spending",
                         categories: outcomeCategories,
-                        transactions: transactions,
+                        transactions: monthTransactions,
                         columnCount: columnCount,
                         tileWidth: tileWidth,
                         tileHeight: tileHeight,
                         spacing: spacing,
                         editMode: editMode,
+                        isReordering: $isReordering,
                         onTileTap:       { selectedCategory = $0 },
                         onTileEdit:      { categoryToEdit = $0 },
                         onTileLongPress: { withAnimation(.spring(response: 0.3)) { editMode = true } },
@@ -66,12 +96,13 @@ struct HomeView: View {
                     CategorySection(
                         title: "Income",
                         categories: incomeCategories,
-                        transactions: transactions,
+                        transactions: monthTransactions,
                         columnCount: columnCount,
                         tileWidth: tileWidth,
                         tileHeight: tileHeight,
                         spacing: spacing,
                         editMode: editMode,
+                        isReordering: $isReordering,
                         onTileTap:       { selectedCategory = $0 },
                         onTileEdit:      { categoryToEdit = $0 },
                         onTileLongPress: { withAnimation(.spring(response: 0.3)) { editMode = true } },
@@ -79,8 +110,15 @@ struct HomeView: View {
                         onAddTap:        { addingCategoryIsOutcome = false }
                     )
                 }
-                .padding(padding)
+                .padding(.vertical, padding)
+                .padding(.horizontal, padding)
             }
+            // Disable the ScrollView's default clipping so tile drop-shadows
+            // are never cut off at the left/right edges.
+            .scrollClipDisabled()
+            // Freeze scrolling while a tile is in flight so the drag can't be
+            // hijacked by the scroll view.
+            .scrollDisabled(isReordering)
             // "Done" button — floats in top-right corner when in edit mode
             .overlay(alignment: .topTrailing) {
                 if editMode {
@@ -107,7 +145,9 @@ struct HomeView: View {
                 categoryColor:          category.categoryColor,
                 isIncome:               !category.isOutcome,
                 defaultActiveTaxNames:  category.defaultActiveTaxNames,
-                defaultTipRate:         category.defaultTipRate
+                defaultTipRate:         category.defaultTipRate,
+                isGasoline:             category.isGasoline,
+                categoryTaxPerLiter:    category.gasolineTaxPerLiter
             )
             .presentationDetents([.large])
         }
@@ -145,6 +185,12 @@ struct HomeView: View {
             AddCategoryView(isOutcome: category.isOutcome, editingCategory: category)
                 .presentationDetents([.large])
         }
+
+        // Sheet: year-month picker
+        .sheet(isPresented: $showMonthPicker) {
+            MonthPickerSheet(selectedMonth: $selectedMonth, isPresented: $showMonthPicker)
+                .presentationDetents([.medium])
+        }
     }
 
     // Seeds default categories the very first time the app runs
@@ -177,7 +223,10 @@ struct HomeView: View {
 // MARK: - CategorySection
 // ============================================================
 // One section (either Outcome or Income) containing its tile grid.
-// Extracted into its own view to keep HomeView clean.
+//
+// Reordering ("floating tile") lives entirely inside this view. A drag can
+// only ever rearrange tiles within the same section — Spending and Income
+// tiles can never cross over.
 
 struct CategorySection: View {
     let title: String
@@ -188,11 +237,41 @@ struct CategorySection: View {
     let tileHeight: CGFloat
     let spacing: CGFloat
     let editMode: Bool
+    @Binding var isReordering: Bool
     let onTileTap: (CategoryModel) -> Void
     let onTileEdit: (CategoryModel) -> Void
     let onTileLongPress: () -> Void
     let onTileDelete: (CategoryModel) -> Void
     let onAddTap: () -> Void
+
+    @Environment(\.modelContext) private var modelContext
+
+    // Local ordered copy of the categories, used for live reflow while dragging.
+    @State private var items: [CategoryModel] = []
+
+    // Collapse / expand
+    @State private var isCollapsed = false
+    @State private var gridHeight: CGFloat = 0
+
+    // Drag state
+    // floatingName — name of the tile currently in flight (nil = none)
+    // pickupCenter — the tile's slot centre in grid coordinates at lift time
+    // floatOffset  — cumulative finger translation since lift
+    @State private var floatingName: String? = nil
+    @State private var pickupCenter: CGPoint = .zero
+    @State private var floatOffset: CGSize = .zero
+
+    // Unique coordinate-space name per section instance
+    private var coordSpace: String { "catGrid_\(title)" }
+
+    private var contentWidth: CGFloat {
+        CGFloat(columnCount) * tileWidth + CGFloat(max(columnCount - 1, 0)) * spacing
+    }
+
+    // Fingerprint used to resync `items` when categories change outside a drag.
+    private var orderSignature: [String] {
+        categories.map { "\($0.name)#\($0.sortOrder)" }
+    }
 
     func total(for name: String) -> Double {
         transactions.filter { $0.categoryName == name }.reduce(0) { $0 + $1.amount }
@@ -200,45 +279,414 @@ struct CategorySection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.largeTitle).bold()
-                .padding(.leading, 4)
+            header
 
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.fixed(tileWidth), spacing: spacing), count: columnCount),
-                spacing: spacing
-            ) {
-                ForEach(categories) { category in
-                    CategoryButton(
-                        categoryName:    category.name,
-                        categorySymbol:  category.symbol,
-                        categoryAmount:  total(for: category.name),
-                        backgroundColor: category.categoryColor,
-                        tileWidth:       tileWidth,
-                        tileHeight:      tileHeight,
-                        editMode:        editMode,
-                        onDeleteTap:     { onTileDelete(category) },
-                        onTap:           { editMode ? onTileEdit(category) : onTileTap(category) },
-                        onLongPress:     { onTileLongPress() }
+            // Clipped collapse wrapper — the floating overlay is placed OUTSIDE
+            // this frame so it is never cut off by .clipped().
+            ZStack(alignment: .top) {
+                grid
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear
+                                .onAppear { gridHeight = geo.size.height }
+                                .onChange(of: geo.size.height) { _, h in gridHeight = h }
+                        }
                     )
+                    .opacity(isCollapsed ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.5), value: isCollapsed)
+            }
+            // Animate height to 0 when collapsed.
+            // We use a wide mask (never clips left/right shadows) instead of
+            // .clipped(). 10pt of extra space is added above (for X badges at
+            // y:-6) and below (for the tile drop-shadow radius) via the
+            // padding / negative-padding pairs, which keep layout size unchanged.
+            .padding(.top, 10)
+            .padding(.bottom, 10)
+            .frame(height: isCollapsed ? 0 : (gridHeight > 0 ? gridHeight + 20 : 0), alignment: .top)
+            .animation(.easeInOut(duration: 0.5), value: isCollapsed)
+            .mask(alignment: .top) {
+                Rectangle()
+                    .frame(
+                        width: 100_000,
+                        height: isCollapsed ? 0 : (gridHeight > 0 ? gridHeight + 20 : 0)
+                    )
+                    .animation(.easeInOut(duration: 0.5), value: isCollapsed)
+            }
+            .padding(.top, -10)
+            .padding(.bottom, -10)
+        }
+        // The floating tile overlay sits on the outer VStack so it is above
+        // the clipped collapse frame and can render anywhere within the section.
+        .overlay(alignment: .topLeading) {
+            floatingOverlay
+        }
+        .onAppear { if items.isEmpty { items = categories } }
+        .onChange(of: orderSignature) { _, _ in
+            if floatingName == nil { items = categories }
+        }
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        Button { isCollapsed.toggle() } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title)
+                    .font(.largeTitle).bold()
+                    .foregroundColor(.primary)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .rotationEffect(.degrees(isCollapsed ? -90 : 0))
+                    .animation(.easeInOut(duration: 0.25), value: isCollapsed)
+
+                if isCollapsed {
+                    Text("Tap to show")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .transition(.opacity)
                 }
 
-                // + tile — always visible when section is empty, or in edit mode
-                if editMode || categories.isEmpty {
-                    Button { onAddTap() } label: {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 15)
-                                .fill(Color.secondary.opacity(0.15))
-                                .frame(width: tileWidth, height: tileHeight)
-                            Image(systemName: "plus")
-                                .font(.system(size: 32, weight: .medium))
-                                .foregroundColor(.secondary)
-                        }
+                Spacer()
+            }
+            .padding(.leading, 20)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Grid
+
+    private var grid: some View {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.fixed(tileWidth), spacing: spacing), count: columnCount),
+            spacing: spacing
+        ) {
+            ForEach(items) { category in
+                tile(for: category)
+            }
+
+            if editMode || items.isEmpty {
+                addTile
+            }
+        }
+        .frame(width: contentWidth, alignment: .leading)
+        .coordinateSpace(name: coordSpace)
+    }
+
+    // MARK: Individual tile
+
+    private func tile(for category: CategoryModel) -> some View {
+        CategoryButton(
+            categoryName:    category.name,
+            categorySymbol:  category.symbol,
+            categoryAmount:  total(for: category.name),
+            backgroundColor: category.categoryColor,
+            tileWidth:       tileWidth,
+            tileHeight:      tileHeight,
+            editMode:        editMode,
+            onDeleteTap:     { onTileDelete(category) },
+            onTap: {
+                guard floatingName == nil else { return }
+                if editMode { onTileEdit(category) } else { onTileTap(category) }
+            },
+            onLongPress: {
+                guard floatingName == nil, !editMode else { return }
+                onTileLongPress()
+            }
+        )
+        // Ghost placeholder while floating — stays in layout to hold the gap.
+        .opacity(floatingName == category.name ? 0 : 1)
+        // In edit mode, attach the drag gesture directly. Because CategoryButton
+        // now uses .onTapGesture/.onLongPressGesture (no UIKit Button in the
+        // hit path) there is no gesture conflict.
+        .gesture(editMode ? dragGesture(for: category) : nil)
+    }
+
+    private var addTile: some View {
+        Button { onAddTap() } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 15)
+                    .fill(Color.secondary.opacity(0.15))
+                    .frame(width: tileWidth, height: tileHeight)
+                Image(systemName: "plus")
+                    .font(.system(size: 32, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Floating overlay
+
+    // Rendered on the outer VStack so it is above the clipped collapse frame.
+    // pickupCenter is in grid-local coords; we offset by headerHeight to
+    // account for the section title row that sits above the grid.
+    @ViewBuilder
+    private var floatingOverlay: some View {
+        if let floatingName,
+           let cat = items.first(where: { $0.name == floatingName }) {
+            CategoryButton(
+                categoryName:    cat.name,
+                categorySymbol:  cat.symbol,
+                categoryAmount:  total(for: cat.name),
+                backgroundColor: cat.categoryColor,
+                tileWidth:       tileWidth,
+                tileHeight:      tileHeight,
+                editMode:        false,
+                onDeleteTap:     {},
+                onTap:           {},
+                onLongPress:     {}
+            )
+            .scaleEffect(1.08)
+            .shadow(color: .black.opacity(0.28), radius: 14, y: 8)
+            .position(
+                x: pickupCenter.x + floatOffset.width,
+                y: pickupCenter.y + floatOffset.height + headerHeight
+            )
+            .allowsHitTesting(false)
+            .zIndex(999)
+        }
+    }
+
+    // Approximate height of the header row (largeTitle + spacing).
+    private var headerHeight: CGFloat { 52 }
+
+    // MARK: Drag gesture
+
+    private func dragGesture(for category: CategoryModel) -> some Gesture {
+        // LongPressGesture lifts the tile after 0.35 s; DragGesture then tracks
+        // the finger. Because CategoryButton no longer contains a UIKit Button,
+        // there is nothing competing with this gesture.
+        LongPressGesture(minimumDuration: 0.35)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(coordSpace)))
+            .onChanged { value in
+                switch value {
+                case .second(true, let drag):
+                    if floatingName == nil {
+                        // Lift moment: record the tile's current slot centre.
+                        let idx = items.firstIndex { $0.name == category.name } ?? 0
+                        pickupCenter = slotCenter(for: idx)
+                        floatOffset = .zero
+                        floatingName = category.name
+                        isReordering = true
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    }
+                    if let drag {
+                        floatOffset = drag.translation
+                        reflow(fingerAt: drag.location)
+                    }
+                default:
+                    break
+                }
+            }
+            .onEnded { _ in commitAndDrop() }
+    }
+
+    // Shift items so the dragged tile occupies the slot nearest the finger.
+    private func reflow(fingerAt point: CGPoint) {
+        guard let floatingName,
+              let from = items.firstIndex(where: { $0.name == floatingName }) else { return }
+        let to = nearestSlot(for: point)
+        guard to != from else { return }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            let moved = items.remove(at: from)
+            items.insert(moved, at: min(to, items.count))
+        }
+    }
+
+    // Write final sortOrder values to SwiftData and drop the floating tile.
+    private func commitAndDrop() {
+        if floatingName != nil {
+            for (i, cat) in items.enumerated() {
+                cat.sortOrder = i
+            }
+            try? modelContext.save()
+        }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+            floatingName = nil
+            floatOffset = .zero
+        }
+        isReordering = false
+    }
+
+    // MARK: Geometry helpers
+
+    // Centre of a grid slot in the named coordinate space.
+    private func slotCenter(for index: Int) -> CGPoint {
+        let cols = max(columnCount, 1)
+        let col = index % cols
+        let row = index / cols
+        return CGPoint(
+            x: CGFloat(col) * (tileWidth + spacing) + tileWidth / 2,
+            y: CGFloat(row) * (tileHeight + spacing) + tileHeight / 2
+        )
+    }
+
+    // Index of the slot whose centre is nearest the given point.
+    private func nearestSlot(for point: CGPoint) -> Int {
+        guard !items.isEmpty else { return 0 }
+        let col = min(max(Int(point.x / (tileWidth + spacing)), 0), columnCount - 1)
+        let row = max(Int(point.y / (tileHeight + spacing)), 0)
+        return min(row * columnCount + col, items.count - 1)
+    }
+}
+
+// ============================================================
+// MARK: - Calendar helper
+// ============================================================
+
+extension Calendar {
+    func startOfMonth(for date: Date) -> Date {
+        let comps = dateComponents([.year, .month], from: date)
+        return self.date(from: comps) ?? date
+    }
+}
+
+// ============================================================
+// MARK: - MonthNavigatorBar
+// ============================================================
+
+struct MonthNavigatorBar: View {
+    @Binding var selectedMonth: Date
+    @Binding var showMonthPicker: Bool
+
+    private var label: String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMMM yyyy"
+        return fmt.string(from: selectedMonth)
+    }
+
+    var body: some View {
+        HStack {
+            Button {
+                selectedMonth = Calendar.current.date(byAdding: .month, value: -1, to: selectedMonth) ?? selectedMonth
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Button {
+                showMonthPicker = true
+            } label: {
+                Text(label)
+                    .font(.headline)
+                    .foregroundColor(.primary)
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Button {
+                selectedMonth = Calendar.current.date(byAdding: .month, value: 1, to: selectedMonth) ?? selectedMonth
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+// ============================================================
+// MARK: - MonthPickerSheet
+// ============================================================
+
+struct MonthPickerSheet: View {
+    @Binding var selectedMonth: Date
+    @Binding var isPresented: Bool
+
+    private let years: [Int] = {
+        let current = Calendar.current.component(.year, from: Date())
+        return Array((current - 5)...(current + 2))
+    }()
+
+    private let monthSymbols: [String] = {
+        let fmt = DateFormatter()
+        return fmt.shortMonthSymbols ?? DateFormatter().shortMonthSymbols!
+    }()
+
+    @State private var displayedYear: Int = Calendar.current.component(.year, from: Date())
+
+    private var selectedYear: Int    { Calendar.current.component(.year,  from: selectedMonth) }
+    private var selectedMonthIdx: Int { Calendar.current.component(.month, from: selectedMonth) - 1 }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                HStack {
+                    Button {
+                        if displayedYear > years.first! { displayedYear -= 1 }
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(displayedYear > years.first! ? .primary : .secondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+                    Text(String(displayedYear)).font(.title3.bold())
+                    Spacer()
+
+                    Button {
+                        if displayedYear < years.last! { displayedYear += 1 }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(displayedYear < years.last! ? .primary : .secondary)
                     }
                     .buttonStyle(.plain)
                 }
+                .padding(.horizontal, 24)
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
+                    ForEach(0..<12, id: \.self) { idx in
+                        let isSelected = idx == selectedMonthIdx && displayedYear == selectedYear
+                        Button {
+                            var comps = DateComponents()
+                            comps.year  = displayedYear
+                            comps.month = idx + 1
+                            comps.day   = 1
+                            if let date = Calendar.current.date(from: comps) {
+                                selectedMonth = date
+                            }
+                            isPresented = false
+                        } label: {
+                            Text(monthSymbols[idx])
+                                .font(.system(size: 15, weight: isSelected ? .semibold : .regular))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(isSelected ? Color.accentColor : Color.secondary.opacity(0.1))
+                                )
+                                .foregroundColor(isSelected ? .white : .primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 20)
+
+                Spacer()
+            }
+            .padding(.top, 20)
+            .navigationTitle("Select Month")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { isPresented = false }
+                }
             }
         }
+        .onAppear { displayedYear = selectedYear }
     }
 }
 

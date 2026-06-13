@@ -17,8 +17,21 @@ class Transaction {
     var categoryName: String
     var categorySymbol: String
     var currency: String
-    var projectCode: String?
+    var projectCodesJSON: String = "[]"
     var isIncome: Bool          // true = income category (salary, freelance, etc.)
+
+    // Convenience computed property — not persisted, decodes/encodes projectCodesJSON
+    var projectCodes: [String] {
+        get {
+            (try? JSONDecoder().decode([String].self, from: projectCodesJSON.data(using: .utf8) ?? Data())) ?? []
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue),
+               let json = String(data: data, encoding: .utf8) {
+                projectCodesJSON = json
+            }
+        }
+    }
 
     // MARK: - Base
     var baseAmount: Double      // price before tax and tip — always calculated automatically
@@ -48,6 +61,12 @@ class Transaction {
     var previousFillupDate: Date?
     var dailyGasolineCost: Double
 
+    // MARK: - Linked group (gasoline daily splits share a groupID)
+    // groupID is a UUID string shared by all daily transactions from one fill-up.
+    // isGasolineSplit = true for the N-1 synthetic daily entries; false for the mother entry.
+    var groupID: String?
+    var isGasolineSplit: Bool
+
     init(
         title: String,
         amount: Double,
@@ -55,7 +74,7 @@ class Transaction {
         categoryName: String,
         categorySymbol: String,
         currency: String = "CAD",
-        projectCode: String? = nil,
+        projectCodes: [String] = [],
         isIncome: Bool = false,
         taxable: Bool = false,
         taxRates: [TaxRate] = [
@@ -70,7 +89,9 @@ class Transaction {
         gasoline: Bool = false,
         pricePerLiter: Double = 0.0,
         taxPerLiter: Double = 0.0,
-        previousFillupDate: Date? = nil
+        previousFillupDate: Date? = nil,
+        groupID: String? = nil,
+        isGasolineSplit: Bool = false
     ) {
         self.title = title
         self.amount = amount
@@ -78,8 +99,14 @@ class Transaction {
         self.categoryName = categoryName
         self.categorySymbol = categorySymbol
         self.currency = currency
-        self.projectCode = projectCode
         self.isIncome = isIncome
+        // Encode project codes to JSON
+        if let data = try? JSONEncoder().encode(projectCodes),
+           let json = String(data: data, encoding: .utf8) {
+            self.projectCodesJSON = json
+        } else {
+            self.projectCodesJSON = "[]"
+        }
         self.taxable = taxable
         self.tippable = tippable
         self.availableTipRates = availableTipRates
@@ -90,6 +117,8 @@ class Transaction {
         self.pricePerLiter = pricePerLiter
         self.taxPerLiter = taxPerLiter
         self.previousFillupDate = previousFillupDate
+        self.groupID = groupID
+        self.isGasolineSplit = isGasolineSplit
 
         // MARK: Calculate base amount
         //
