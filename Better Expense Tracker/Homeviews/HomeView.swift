@@ -27,11 +27,8 @@ struct HomeView: View {
     // Which section's + was tapped (nil = not adding, true = outcome, false = income)
     @State private var addingCategoryIsOutcome: Bool? = nil
 
-    // Month navigator — start of the currently displayed month
-    @State private var selectedMonth: Date = Calendar.current.startOfMonth(for: Date())
-
-    // Controls the year-month picker sheet
-    @State private var showMonthPicker = false
+    // Shared date-range state (synced across Home, Transactions, Projects)
+    @EnvironmentObject private var period: SharedPeriodState
 
     // Prevents seeding default categories more than once
     @AppStorage("hasSeededCategories") private var hasSeededCategories = false
@@ -45,97 +42,148 @@ struct HomeView: View {
     var outcomeCategories: [CategoryModel] { categories.filter { $0.isOutcome } }
     var incomeCategories:  [CategoryModel] { categories.filter { !$0.isOutcome } }
 
-    // Transactions filtered to the selected month
+    // Start of the current period
+    // Transactions filtered to the current period
     var monthTransactions: [Transaction] {
-        let cal = Calendar.current
-        let start = selectedMonth
-        let end = cal.date(byAdding: .month, value: 1, to: start) ?? start
-        return transactions.filter { $0.date >= start && $0.date < end }
+        transactions.filter { $0.date >= period.periodStart && $0.date < period.periodEnd }
     }
 
     var body: some View {
         GeometryReader { geometry in
-            let availableWidth = geometry.size.width - (padding * 2)
-            let columnCount = max(1, Int(availableWidth / (minTileWidth + spacing)))
-            let tileWidth = min(maxTileWidth, (availableWidth - CGFloat(columnCount - 1) * spacing) / CGFloat(columnCount))
-            let tileHeight = tileWidth * 4 / 3
+                let availableWidth = geometry.size.width - (padding * 2)
+                let columnCount = max(1, Int(availableWidth / (minTileWidth + spacing)))
+                let tileWidth = min(maxTileWidth, (availableWidth - CGFloat(columnCount - 1) * spacing) / CGFloat(columnCount))
+                let tileHeight = tileWidth * 4 / 3
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                ZStack(alignment: .top) {
+                    // ScrollView always fills the full available space.
+                    // safeAreaInset pushes content below the navigator when it is visible.
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 24) {
+                            CategorySection(
+                                title: "Spending",
+                                categories: outcomeCategories,
+                                transactions: monthTransactions,
+                                columnCount: columnCount,
+                                tileWidth: tileWidth,
+                                tileHeight: tileHeight,
+                                spacing: spacing,
+                                editMode: editMode,
+                                isReordering: $isReordering,
+                                onTileTap:       { selectedCategory = $0 },
+                                onTileEdit:      { categoryToEdit = $0 },
+                                onTileLongPress: { withAnimation(.spring(response: 0.3)) { editMode = true } },
+                                onTileDelete:    { categoryToDelete = $0 },
+                                onAddTap:        { addingCategoryIsOutcome = true }
+                            )
 
-                    // Month navigator bar — hidden while in edit mode
-                    if !editMode {
-                        MonthNavigatorBar(
-                            selectedMonth: $selectedMonth,
-                            showMonthPicker: $showMonthPicker
-                        )
-                        .padding(.horizontal, 4)
-                        .padding(.bottom, -24)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                            CategorySection(
+                                title: "Income",
+                                categories: incomeCategories,
+                                transactions: monthTransactions,
+                                columnCount: columnCount,
+                                tileWidth: tileWidth,
+                                tileHeight: tileHeight,
+                                spacing: spacing,
+                                editMode: editMode,
+                                isReordering: $isReordering,
+                                onTileTap:       { selectedCategory = $0 },
+                                onTileEdit:      { categoryToEdit = $0 },
+                                onTileLongPress: { withAnimation(.spring(response: 0.3)) { editMode = true } },
+                                onTileDelete:    { categoryToDelete = $0 },
+                                onAddTap:        { addingCategoryIsOutcome = false }
+                            )
+                        }
+                        .padding(.horizontal, padding)
+                        .padding(.bottom, padding)
+                        .padding(.top, padding)
+                    }
+                    .scrollClipDisabled()
+                    .scrollDisabled(isReordering)
+                    // Push scroll content down by the navigator + tabs height when visible
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        Color.clear.frame(height: editMode ? 0 : 96)
+                            .animation(.spring(response: 0.3), value: editMode)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if editMode {
+                            Button("Done") {
+                                withAnimation(.spring(response: 0.3)) { editMode = false }
+                            }
+                            .font(.headline)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(20)
+                            .padding(16)
+                        }
                     }
 
-                    // Outcome section (spending categories)
-                    CategorySection(
-                        title: "Spending",
-                        categories: outcomeCategories,
-                        transactions: monthTransactions,
-                        columnCount: columnCount,
-                        tileWidth: tileWidth,
-                        tileHeight: tileHeight,
-                        spacing: spacing,
-                        editMode: editMode,
-                        isReordering: $isReordering,
-                        onTileTap:       { selectedCategory = $0 },
-                        onTileEdit:      { categoryToEdit = $0 },
-                        onTileLongPress: { withAnimation(.spring(response: 0.3)) { editMode = true } },
-                        onTileDelete:    { categoryToDelete = $0 },
-                        onAddTap:        { addingCategoryIsOutcome = true }
-                    )
-
-                    // Income section (earning categories)
-                    CategorySection(
-                        title: "Income",
-                        categories: incomeCategories,
-                        transactions: monthTransactions,
-                        columnCount: columnCount,
-                        tileWidth: tileWidth,
-                        tileHeight: tileHeight,
-                        spacing: spacing,
-                        editMode: editMode,
-                        isReordering: $isReordering,
-                        onTileTap:       { selectedCategory = $0 },
-                        onTileEdit:      { categoryToEdit = $0 },
-                        onTileLongPress: { withAnimation(.spring(response: 0.3)) { editMode = true } },
-                        onTileDelete:    { categoryToDelete = $0 },
-                        onAddTap:        { addingCategoryIsOutcome = false }
-                    )
-                }
-                .padding(.vertical, padding)
-                .padding(.horizontal, padding)
-            }
-            // Disable the ScrollView's default clipping so tile drop-shadows
-            // are never cut off at the left/right edges.
-            .scrollClipDisabled()
-            // Freeze scrolling while a tile is in flight so the drag can't be
-            // hijacked by the scroll view.
-            .scrollDisabled(isReordering)
-            // "Done" button — floats in top-right corner when in edit mode
-            .overlay(alignment: .topTrailing) {
-                if editMode {
-                    Button("Done") {
-                        withAnimation(.spring(response: 0.3)) { editMode = false }
+                    // Navigator + range tabs float on top, fade out in edit mode
+                    VStack(spacing: 0) {
+                        if period.selectedRange == .month {
+                            MonthPeriodNavigatorBar(selectedMonth: $period.selectedMonth)
+                        } else {
+                            PeriodNavigatorBar(
+                                onPrevious: { period.periodOffset -= 1 },
+                                onNext:     { period.periodOffset = min(0, period.periodOffset + 1) },
+                                hideChevrons: period.selectedRange == .custom
+                            ) {
+                                Text(period.periodLabel)
+                                    .font(.headline)
+                                    .foregroundColor(.primary)
+                                    .onTapGesture {
+                                        if period.selectedRange == .week {
+                                            period.pickerWeekStart = period.periodStart
+                                            period.showWeekPicker = true
+                                        } else if period.selectedRange == .custom {
+                                            period.showCustomRangePicker = true
+                                        }
+                                    }
+                                    .onLongPressGesture(minimumDuration: 0.4) {
+                                        guard period.periodOffset != 0, period.selectedRange != .custom else { return }
+                                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                            period.periodOffset = 0
+                                        }
+                                    }
+                            }
+                        }
+                        SharedDateRangeTabs(selected: $period.selectedRange, onRangeChange: { },
+                                            onCustomTap: { period.showCustomRangePicker = true })
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
                     }
-                    .font(.headline)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(20)
-                    .padding(16)
+                    .background(.background)
+                    .opacity(editMode ? 0 : 1)
+                    .allowsHitTesting(!editMode)
+                    .animation(.spring(response: 0.3), value: editMode)
                 }
             }
+            .onAppear { seedIfNeeded() }
+
+        // Sheet: week picker
+        .sheet(isPresented: $period.showWeekPicker) {
+            WeekPickerSheet(selectedWeekStart: $period.pickerWeekStart, isPresented: $period.showWeekPicker)
+                .presentationDetents([.medium])
         }
-        .onAppear { seedIfNeeded() }
+        .onChange(of: period.pickerWeekStart) { _, newMonday in
+            let cal = Calendar.current
+            let now = Date.now
+            let weekdayNow = cal.component(.weekday, from: now)
+            let offsetNow = (weekdayNow + 5) % 7
+            let thisMonday = cal.startOfDay(for: cal.date(byAdding: .day, value: -offsetNow, to: now)!)
+            let weeks = cal.dateComponents([.weekOfYear], from: thisMonday, to: newMonday).weekOfYear ?? 0
+            period.periodOffset = weeks
+        }
+
+        // Sheet: custom date range picker
+        .sheet(isPresented: $period.showCustomRangePicker) {
+            CustomDateRangeSheet(startDate: $period.customStart, endDate: $period.customEnd, isPresented: $period.showCustomRangePicker)
+                .presentationDetents([.medium])
+                .onDisappear { period.selectedRange = .custom }
+        }
 
         // Sheet: add a transaction to an existing category
         .sheet(item: $selectedCategory) { category in
@@ -186,11 +234,6 @@ struct HomeView: View {
                 .presentationDetents([.large])
         }
 
-        // Sheet: year-month picker
-        .sheet(isPresented: $showMonthPicker) {
-            MonthPickerSheet(selectedMonth: $selectedMonth, isPresented: $showMonthPicker)
-                .presentationDetents([.medium])
-        }
     }
 
     // Seeds default categories the very first time the app runs
@@ -544,151 +587,8 @@ extension Calendar {
     }
 }
 
-// ============================================================
-// MARK: - MonthNavigatorBar
-// ============================================================
 
-struct MonthNavigatorBar: View {
-    @Binding var selectedMonth: Date
-    @Binding var showMonthPicker: Bool
 
-    private var label: String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "MMMM yyyy"
-        return fmt.string(from: selectedMonth)
-    }
-
-    var body: some View {
-        HStack {
-            Button {
-                selectedMonth = Calendar.current.date(byAdding: .month, value: -1, to: selectedMonth) ?? selectedMonth
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.primary)
-                    .frame(width: 36, height: 36)
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            Button {
-                showMonthPicker = true
-            } label: {
-                Text(label)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            Button {
-                selectedMonth = Calendar.current.date(byAdding: .month, value: 1, to: selectedMonth) ?? selectedMonth
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.primary)
-                    .frame(width: 36, height: 36)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-}
-
-// ============================================================
-// MARK: - MonthPickerSheet
-// ============================================================
-
-struct MonthPickerSheet: View {
-    @Binding var selectedMonth: Date
-    @Binding var isPresented: Bool
-
-    private let years: [Int] = {
-        let current = Calendar.current.component(.year, from: Date())
-        return Array((current - 5)...(current + 2))
-    }()
-
-    private let monthSymbols: [String] = {
-        let fmt = DateFormatter()
-        return fmt.shortMonthSymbols ?? DateFormatter().shortMonthSymbols!
-    }()
-
-    @State private var displayedYear: Int = Calendar.current.component(.year, from: Date())
-
-    private var selectedYear: Int    { Calendar.current.component(.year,  from: selectedMonth) }
-    private var selectedMonthIdx: Int { Calendar.current.component(.month, from: selectedMonth) - 1 }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                HStack {
-                    Button {
-                        if displayedYear > years.first! { displayedYear -= 1 }
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(displayedYear > years.first! ? .primary : .secondary)
-                    }
-                    .buttonStyle(.plain)
-
-                    Spacer()
-                    Text(String(displayedYear)).font(.title3.bold())
-                    Spacer()
-
-                    Button {
-                        if displayedYear < years.last! { displayedYear += 1 }
-                    } label: {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(displayedYear < years.last! ? .primary : .secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 24)
-
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
-                    ForEach(0..<12, id: \.self) { idx in
-                        let isSelected = idx == selectedMonthIdx && displayedYear == selectedYear
-                        Button {
-                            var comps = DateComponents()
-                            comps.year  = displayedYear
-                            comps.month = idx + 1
-                            comps.day   = 1
-                            if let date = Calendar.current.date(from: comps) {
-                                selectedMonth = date
-                            }
-                            isPresented = false
-                        } label: {
-                            Text(monthSymbols[idx])
-                                .font(.system(size: 15, weight: isSelected ? .semibold : .regular))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .fill(isSelected ? Color.accentColor : Color.secondary.opacity(0.1))
-                                )
-                                .foregroundColor(isSelected ? .white : .primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 20)
-
-                Spacer()
-            }
-            .padding(.top, 20)
-            .navigationTitle("Select Month")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { isPresented = false }
-                }
-            }
-        }
-        .onAppear { displayedYear = selectedYear }
-    }
-}
 
 #Preview {
     let container = try! ModelContainer(

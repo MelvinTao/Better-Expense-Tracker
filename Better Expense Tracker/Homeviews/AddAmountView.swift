@@ -46,7 +46,9 @@ struct AddAmountView: View {
     @State private var inputString = "0"
     @State private var noteText = ""
     @State private var selectedDate = Date.now
-    @State private var projectCodes: [String] = []
+    // Selected project code — at most one project + one sub-code
+    @State private var selectedProjectCode: String? = nil
+    @State private var selectedSubCode: String? = nil
 
     // Tax state
     @State private var activeTaxRates: [StoredTaxRate] = []
@@ -59,7 +61,6 @@ struct AddAmountView: View {
     // UI
     @State private var showDatePicker = false
     @State private var showProjectCodeInput = false
-    @State private var newCodeInputText = ""
 
     // Gasoline price-per-liter slider (range: 100.99 – 300.99, step 1.00)
     // Stored value is the integer whole-cent part (e.g. 189 → 189.99 ¢/L)
@@ -72,6 +73,12 @@ struct AddAmountView: View {
     // MARK: Computed
 
     var inputValue: Double { Double(inputString) ?? 0 }
+
+    // Encodes the selected project+sub into the [String] format stored on Transaction
+    var projectCodesSaveValue: [String] {
+        guard let proj = selectedProjectCode, let sub = selectedSubCode else { return [] }
+        return [proj, sub]
+    }
 
     // Gasoline price: step (0–200) maps to 100.99–300.99 ¢/L
     // e.g. step 89 → 189.99, step 0 → 100.99, step 200 → 300.99
@@ -193,7 +200,7 @@ struct AddAmountView: View {
                         }
                         VStack(spacing: 1) {
                             Text("Gas tax").font(.caption2).foregroundColor(.secondary)
-                            Text(String(format: "$%.2f", gasTax))
+                            Text(formatCurrency(gasTax))
                                 .font(.caption).foregroundColor(.secondary)
                         }
                     }
@@ -253,24 +260,26 @@ struct AddAmountView: View {
                 .padding(.bottom, 8)
             }
 
-            // Project code chips (shown when at least one code exists)
-            if !projectCodes.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(projectCodes, id: \.self) { code in
-                            HStack(spacing: 4) {
-                                Image(systemName: "folder.fill").font(.caption2)
-                                Text(code).font(.caption)
-                                Button { projectCodes.removeAll { $0 == code } } label: {
-                                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-                                }
-                            }
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(Color.secondary.opacity(0.12))
-                            .clipShape(Capsule())
+            // Selected project code badge
+            if let proj = selectedProjectCode, let sub = selectedSubCode {
+                HStack(spacing: 6) {
+                    HStack(spacing: 4) {
+                        Text("#").font(.caption2).foregroundColor(.secondary)
+                        Text(proj).font(.caption.weight(.semibold))
+                        Text("•").font(.caption2).foregroundColor(.secondary)
+                        Text(sub).font(.caption.weight(.semibold))
+                        Button {
+                            selectedProjectCode = nil
+                            selectedSubCode = nil
+                        } label: {
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                         }
                     }
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(categoryColor.color.opacity(0.85))
+                    .clipShape(Capsule())
+                    Spacer()
                 }
                 .padding(.horizontal, 24).padding(.vertical, 2)
             }
@@ -365,7 +374,9 @@ struct AddAmountView: View {
                 if inputString.isEmpty { inputString = "0" }
                 noteText = tx.title == tx.categoryName ? "" : tx.title
                 selectedDate = tx.date
-                projectCodes = tx.projectCodes
+                // Restore selected project/sub from the dedicated fields
+                selectedProjectCode = tx.projectCode
+                selectedSubCode     = tx.projectSubCode
                 activeTaxRates = tx.taxRates.map { StoredTaxRate(name: $0.name, rate: $0.rate) }
                 selectedTipRate = tx.selectedTipRate
                 // Restore gasoline price from the transaction if editing
@@ -388,16 +399,13 @@ struct AddAmountView: View {
             TipEditorView(selectedTipRate: $selectedTipRate, accentColor: categoryColor.color)
                 .presentationDetents([.large])
         }
-        .alert("Add Project Code", isPresented: $showProjectCodeInput) {
-            TextField("e.g. PROJ-2026-A", text: $newCodeInputText)
-            Button("Add") {
-                let trimmed = newCodeInputText.trimmingCharacters(in: .whitespaces)
-                if !trimmed.isEmpty && !projectCodes.contains(trimmed) {
-                    projectCodes.append(trimmed)
-                }
-                newCodeInputText = ""
-            }
-            Button("Cancel", role: .cancel) { newCodeInputText = "" }
+        .sheet(isPresented: $showProjectCodeInput) {
+            ProjectCodePickerSheet(
+                selectedProjectCode: $selectedProjectCode,
+                selectedSubCode: $selectedSubCode,
+                accentColor: categoryColor.color
+            )
+            .presentationDetents([.medium, .large])
         }
     }
 
@@ -448,7 +456,8 @@ struct AddAmountView: View {
             tx.title = noteText.isEmpty ? tx.categoryName : noteText
             tx.amount = inputValue
             tx.date = selectedDate
-            tx.projectCodes = projectCodes
+            tx.projectCode    = selectedProjectCode
+            tx.projectSubCode = selectedSubCode
             tx.taxable = !activeTaxRates.isEmpty
             tx.taxRates = txRates
             tx.tippable = selectedTipRate > 0
@@ -464,7 +473,7 @@ struct AddAmountView: View {
                 date:              selectedDate,
                 categoryName:      categoryName,
                 categorySymbol:    categorySymbol,
-                projectCodes:      projectCodes,
+                projectCodes:      projectCodesSaveValue,
                 isIncome:          isIncome,
                 taxable:           !activeTaxRates.isEmpty,
                 taxRates:          txRates,
@@ -561,7 +570,7 @@ struct AddAmountView: View {
                 date:              txDate,
                 categoryName:      categoryName,
                 categorySymbol:    categorySymbol,
-                projectCodes:      isMother ? projectCodes : [],
+                projectCodes:      isMother ? projectCodesSaveValue : [],
                 isIncome:          false,
                 gasoline:          true,
                 pricePerLiter:     isMother ? pricePerL : 0.0,
@@ -1044,6 +1053,188 @@ struct AddTipView: View {
     }
 
     func rd() { if rateString.count > 1 { rateString.removeLast() } else { rateString = "0" } }
+}
+
+// ============================================================
+// MARK: - ProjectCodePickerSheet
+// ============================================================
+
+struct ProjectCodePickerSheet: View {
+    @Binding var selectedProjectCode: String?
+    @Binding var selectedSubCode: String?
+    let accentColor: Color
+
+    @Query(sort: \ProjectCode.sortOrder) var projectCodes: [ProjectCode]
+    @Environment(\.modelContext) var modelContext
+    @Environment(\.dismiss) var dismiss
+
+    @State private var showAddProject = false
+    @State private var addSubTarget: ProjectCode? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                Text("Select project code")
+                    .font(.title3.bold())
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 12)
+
+            Divider()
+
+            // Scrollable project list
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(projectCodes) { project in
+                        projectRow(project)
+                    }
+
+                    // "# +" add new project
+                    Button { showAddProject = true } label: {
+                        HStack(alignment: .center, spacing: 0) {
+                            Text("#")
+                                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .frame(width: 24, alignment: .leading)
+                            Image(systemName: "plus")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+            }
+
+            Divider()
+
+            // Bottom action buttons
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    selectedProjectCode = nil
+                    selectedSubCode = nil
+                    dismiss()
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Color.secondary.opacity(0.12))
+                .foregroundColor(.primary)
+                .cornerRadius(14)
+
+                Button("Add") { dismiss() }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(selectedProjectCode != nil && selectedSubCode != nil ? accentColor : Color.secondary.opacity(0.2))
+                    .foregroundColor(selectedProjectCode != nil && selectedSubCode != nil ? .primary : .secondary)
+                    .cornerRadius(14)
+                    .disabled(selectedProjectCode == nil || selectedSubCode == nil)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .buttonStyle(.plain)
+        }
+        .sheet(isPresented: $showAddProject) {
+            AddProjectCodeSheet(existingNames: projectCodes.map(\.name)) { name in
+                let order = (projectCodes.map(\.sortOrder).max() ?? -1) + 1
+                modelContext.insert(ProjectCode(name: name, sortOrder: order))
+            }
+            .presentationDetents([.height(260)])
+        }
+        .sheet(item: $addSubTarget) { project in
+            AddSubCodeSheet(projectName: project.name, existingSubCodes: project.subCodes) { sub in
+                project.subCodes.append(sub)
+            }
+            .presentationDetents([.height(260)])
+        }
+    }
+
+    // Width of the left gutter that holds "#" or "•" — matches the "# +" at the bottom
+    private let gutterWidth: CGFloat = 24
+
+    @ViewBuilder
+    private func projectRow(_ project: ProjectCode) -> some View {
+        let isProjectSelected = selectedProjectCode == project.name
+        VStack(alignment: .leading, spacing: 8) {
+            // Project header: gutter "#" | capsule button with name only
+            HStack(alignment: .center, spacing: 0) {
+                Text("#")
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .frame(width: gutterWidth, alignment: .leading)
+
+                Button {
+                    if isProjectSelected {
+                        selectedProjectCode = nil
+                        selectedSubCode = nil
+                    } else {
+                        selectedProjectCode = project.name
+                        selectedSubCode = nil
+                    }
+                } label: {
+                    Text(project.name)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(isProjectSelected ? .primary : .secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(isProjectSelected ? accentColor : Color.secondary.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Sub-code row: gutter "•" | horizontally scrollable sub buttons
+            HStack(alignment: .center, spacing: 0) {
+                Text("•")
+                    .font(.system(size: 15))
+                    .foregroundColor(.secondary)
+                    .frame(width: gutterWidth, alignment: .leading)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(project.subCodes, id: \.self) { sub in
+                            let isSubSelected = selectedSubCode == sub && selectedProjectCode == project.name
+                            Button {
+                                if isSubSelected {
+                                    selectedSubCode = nil
+                                    if selectedProjectCode == project.name {
+                                        selectedProjectCode = nil
+                                    }
+                                } else {
+                                    selectedProjectCode = project.name
+                                    selectedSubCode = sub
+                                }
+                            } label: {
+                                Text(sub)
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(isSubSelected ? .primary : .secondary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(isSubSelected ? accentColor : Color.secondary.opacity(0.12))
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        // "+" add sub-code for this project
+                        Button { addSubTarget = project } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(Color.secondary.opacity(0.12))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
 }
 
 #Preview {

@@ -11,66 +11,27 @@ struct TransactionsView: View {
     @AppStorage(AppStorageKeys.timeFormatIs24hr) private var is24hr = false
     @Environment(\.modelContext) var modelContext
 
+    // Shared date-range state (synced across Home, Transactions, Projects)
+    @EnvironmentObject private var period: SharedPeriodState
+
     // Filter chips — empty set means "All"
     @State private var selectedCategoryNames: Set<String> = []
 
     // Long-press to toggle tax/tip visibility in chart and list rows
     @State private var showTaxTip = false
 
-    // Date range picker
-    @State private var selectedRange: DateRange = .month
-    @State private var periodOffset: Int = 0   // 0 = current period, -1 = previous, etc.
-
     // Edit / delete transaction sheets
     @State private var transactionToEdit: Transaction? = nil
     @State private var transactionToDelete: Transaction? = nil
     @State private var showDeleteAlert = false
-    @State private var showDeleteGroupAlert = false  // shown when tx is part of a gasoline group
+    @State private var showDeleteGroupAlert = false
 
-    enum DateRange: String, CaseIterable {
-        case day = "D", week = "W", month = "M", year = "Y"
-    }
+    // MARK: - Period filtering
 
-    // MARK: - Period computation
-
-    var currentPeriodStart: Date {
-        let cal = Calendar.current
-        let now = Date.now
-        switch selectedRange {
-        case .day:
-            let base = cal.date(byAdding: .day, value: periodOffset, to: now)!
-            return cal.startOfDay(for: base)
-        case .week:
-            let base = cal.date(byAdding: .weekOfYear, value: periodOffset, to: now)!
-            let weekday = cal.component(.weekday, from: base)
-            let diff = cal.firstWeekday - weekday
-            let monday = cal.date(byAdding: .day, value: diff <= 0 ? diff : diff - 7, to: base)!
-            return cal.startOfDay(for: monday)
-        case .month:
-            let base = cal.date(byAdding: .month, value: periodOffset, to: now)!
-            return cal.date(from: cal.dateComponents([.year, .month], from: base))!
-        case .year:
-            let base = cal.date(byAdding: .year, value: periodOffset, to: now)!
-            return cal.date(from: cal.dateComponents([.year], from: base))!
-        }
-    }
-
-    var currentPeriodEnd: Date {
-        let cal = Calendar.current
-        switch selectedRange {
-        case .day:   return cal.date(byAdding: .day, value: 1, to: currentPeriodStart)!
-        case .week:  return cal.date(byAdding: .weekOfYear, value: 1, to: currentPeriodStart)!
-        case .month: return cal.date(byAdding: .month, value: 1, to: currentPeriodStart)!
-        case .year:  return cal.date(byAdding: .year, value: 1, to: currentPeriodStart)!
-        }
-    }
-
-    // All transactions in the current period window
     var periodTransactions: [Transaction] {
-        transactions.filter { $0.date >= currentPeriodStart && $0.date < currentPeriodEnd }
+        transactions.filter { $0.date >= period.periodStart && $0.date < period.periodEnd }
     }
 
-    // Filtered by selected category chips
     var filteredTransactions: [Transaction] {
         if selectedCategoryNames.isEmpty { return periodTransactions }
         return periodTransactions.filter { selectedCategoryNames.contains($0.categoryName) }
@@ -78,58 +39,51 @@ struct TransactionsView: View {
 
     // MARK: - Chart buckets
 
-    // Divides the current period into sub-buckets for the histogram.
-    // Returns (bucketStart, [transactions in that bucket]).
     var chartBuckets: [(Date, [Transaction])] {
         let cal = Calendar.current
-        let start = currentPeriodStart
+        let start = period.periodStart
         let allTx = filteredTransactions
 
-        switch selectedRange {
-        case .day:
-            return (0..<24).map { hour in
-                let bucketStart = cal.date(byAdding: .hour, value: hour, to: start)!
-                let bucketEnd   = cal.date(byAdding: .hour, value: 1, to: bucketStart)!
-                let txs = allTx.filter { $0.date >= bucketStart && $0.date < bucketEnd }
-                return (bucketStart, txs)
-            }
+        switch period.selectedRange {
         case .week:
             return (0..<7).map { day in
                 let bucketStart = cal.date(byAdding: .day, value: day, to: start)!
                 let bucketEnd   = cal.date(byAdding: .day, value: 1, to: bucketStart)!
-                let txs = allTx.filter { $0.date >= bucketStart && $0.date < bucketEnd }
-                return (bucketStart, txs)
+                return (bucketStart, allTx.filter { $0.date >= bucketStart && $0.date < bucketEnd })
             }
         case .month:
             let daysInMonth = cal.range(of: .day, in: .month, for: start)?.count ?? 30
             return (0..<daysInMonth).map { day in
                 let bucketStart = cal.date(byAdding: .day, value: day, to: start)!
                 let bucketEnd   = cal.date(byAdding: .day, value: 1, to: bucketStart)!
-                let txs = allTx.filter { $0.date >= bucketStart && $0.date < bucketEnd }
-                return (bucketStart, txs)
+                return (bucketStart, allTx.filter { $0.date >= bucketStart && $0.date < bucketEnd })
             }
         case .year:
             return (0..<12).map { month in
                 let bucketStart = cal.date(byAdding: .month, value: month, to: start)!
                 let bucketEnd   = cal.date(byAdding: .month, value: 1, to: bucketStart)!
-                let txs = allTx.filter { $0.date >= bucketStart && $0.date < bucketEnd }
-                return (bucketStart, txs)
+                return (bucketStart, allTx.filter { $0.date >= bucketStart && $0.date < bucketEnd })
+            }
+        case .custom:
+            let days = max(1, cal.dateComponents([.day], from: period.periodStart, to: period.periodEnd).day ?? 1)
+            return (0..<days).map { day in
+                let bucketStart = cal.date(byAdding: .day, value: day, to: start)!
+                let bucketEnd   = cal.date(byAdding: .day, value: 1, to: bucketStart)!
+                return (bucketStart, allTx.filter { $0.date >= bucketStart && $0.date < bucketEnd })
             }
         }
     }
 
-    // Index of the bucket that contains right now (only relevant when periodOffset == 0)
     var currentBucketIndex: Int? {
-        guard periodOffset == 0 else { return nil }
+        guard period.periodOffset == 0 else { return nil }
         let now = Date.now
         return chartBuckets.firstIndex { bucket in
             let cal = Calendar.current
             let bucketEnd: Date
-            switch selectedRange {
-            case .day:   bucketEnd = cal.date(byAdding: .hour,      value: 1, to: bucket.0)!
-            case .week:  bucketEnd = cal.date(byAdding: .day,       value: 1, to: bucket.0)!
-            case .month: bucketEnd = cal.date(byAdding: .day,       value: 1, to: bucket.0)!
-            case .year:  bucketEnd = cal.date(byAdding: .month,     value: 1, to: bucket.0)!
+            switch period.selectedRange {
+            case .week, .custom: bucketEnd = cal.date(byAdding: .day,   value: 1, to: bucket.0)!
+            case .month:         bucketEnd = cal.date(byAdding: .day,   value: 1, to: bucket.0)!
+            case .year:          bucketEnd = cal.date(byAdding: .month, value: 1, to: bucket.0)!
             }
             return now >= bucket.0 && now < bucketEnd
         }
@@ -137,56 +91,110 @@ struct TransactionsView: View {
 
     // MARK: - Summary averages
 
-    // Number of distinct periods (matching range) that have at least one transaction
     func distinctPeriodCount(isIncome: Bool) -> Int {
         let cal = Calendar.current
         let relevant = transactions.filter { $0.isIncome == isIncome }
         let keys: Set<String> = Set(relevant.map { tx in
-            switch selectedRange {
-            case .day:
-                let dayOrdinal = cal.ordinality(of: .day, in: .year, for: tx.date) ?? 0
-                return "\(cal.component(.year, from: tx.date))-\(dayOrdinal)"
-            case .week:  return "\(cal.component(.year, from: tx.date))-\(cal.component(.weekOfYear, from: tx.date))"
-            case .month: return "\(cal.component(.year, from: tx.date))-\(cal.component(.month, from: tx.date))"
-            case .year:  return "\(cal.component(.year, from: tx.date))"
+            switch period.selectedRange {
+            case .week:   return "\(cal.component(.year, from: tx.date))-\(cal.component(.weekOfYear, from: tx.date))"
+            case .month:  return "\(cal.component(.year, from: tx.date))-\(cal.component(.month, from: tx.date))"
+            case .year:   return "\(cal.component(.year, from: tx.date))"
+            case .custom: return "custom"
             }
         })
         return max(1, keys.count)
     }
 
-    var avgOutcome: Double {
+    var Outcome: Double {
         let total = transactions.filter { !$0.isIncome }.reduce(0) { $0 + $1.amount }
         return total / Double(distinctPeriodCount(isIncome: false))
     }
 
-    var avgIncome: Double {
+    var Income: Double {
         let total = transactions.filter { $0.isIncome }.reduce(0) { $0 + $1.amount }
         return total / Double(distinctPeriodCount(isIncome: true))
     }
+
+    // Tax + tip totals for the current period (all categories, no filter)
+    var periodOutcomeTaxTip: Double {
+        periodTransactions.filter { !$0.isIncome }.reduce(0) { sum, tx in
+            let taxAmt = tx.gasoline ? tx.gasolineTaxAmount : tx.totalTaxAmount
+            return sum + taxAmt + tx.tipAmount
+        }
+    }
+
+    var periodIncomeTaxTip: Double {
+        periodTransactions.filter { $0.isIncome }.reduce(0) { sum, tx in
+            let taxAmt = tx.gasoline ? tx.gasolineTaxAmount : tx.totalTaxAmount
+            return sum + taxAmt + tx.tipAmount
+        }
+    }
+
+    // Period totals (not averaged) for the net card
+    var periodOutcomeTotal: Double {
+        periodTransactions.filter { !$0.isIncome }.reduce(0) { $0 + $1.amount }
+    }
+
+    var periodIncomeTotal: Double {
+        periodTransactions.filter { $0.isIncome }.reduce(0) { $0 + $1.amount }
+    }
+
+    var periodNet: Double { periodIncomeTotal - periodOutcomeTotal }
+
+    var periodNetTaxTip: Double { periodIncomeTaxTip - periodOutcomeTaxTip }
 
     // MARK: - Body
 
     var body: some View {
         VStack(spacing: 0) {
 
+            // Period navigator bar
+            PeriodNavigatorBar(
+                onPrevious: { period.periodOffset -= 1 },
+                onNext:     { period.periodOffset = min(0, period.periodOffset + 1) },
+                hideChevrons: period.selectedRange == .custom
+            ) {
+                Text(period.periodLabel)
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                    .onTapGesture {
+                        if period.selectedRange == .month {
+                            period.pickerMonth = period.periodStart
+                            period.showMonthPicker = true
+                        } else if period.selectedRange == .week {
+                            period.pickerWeekStart = period.periodStart
+                            period.showWeekPicker = true
+                        } else if period.selectedRange == .custom {
+                            period.showCustomRangePicker = true
+                        }
+                    }
+                    .onLongPressGesture(minimumDuration: 0.4) {
+                        guard period.periodOffset != 0, period.selectedRange != .custom else { return }
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            period.periodOffset = 0
+                        }
+                    }
+            }
+
+            SharedDateRangeTabs(selected: $period.selectedRange, onRangeChange: { },
+                                onCustomTap: { period.showCustomRangePicker = true })
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+
+            // Summary cards
+            HStack(spacing: 10) {
+                SummaryCard(title: "Avg Spent", amount: Outcome, taxTipAmount: periodOutcomeTaxTip, isOutcome: true, showTaxTip: showTaxTip)
+                SummaryCard(title: "Avg Earned", amount: Income, taxTipAmount: periodIncomeTaxTip, isOutcome: false, showTaxTip: showTaxTip)
+                SummaryCard(title: "Net", amount: periodNet, taxTipAmount: periodNetTaxTip, isOutcome: false, showTaxTip: showTaxTip, isNet: true)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
+
             CategoryFilterBar(
                 categories: categories,
                 selectedNames: $selectedCategoryNames
             )
-
-            DateRangeTabs(selected: $selectedRange) {
-                periodOffset = 0
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-
-            // Summary cards
-            HStack(spacing: 10) {
-                SummaryCard(title: "Avg Spent", amount: avgOutcome, isOutcome: true)
-                SummaryCard(title: "Avg Earned", amount: avgIncome, isOutcome: false)
-            }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 6)
 
             // Histogram — swipe left/right changes period; long-press toggles tax/tip
             HistogramView(
@@ -200,9 +208,9 @@ struct TransactionsView: View {
             .gesture(DragGesture(minimumDistance: 30)
                 .onEnded { value in
                     if value.translation.width < 0 {
-                        periodOffset -= 1  // swipe left → go back in time
+                        period.periodOffset -= 1
                     } else {
-                        periodOffset = min(0, periodOffset + 1)  // swipe right → forward (cap at current)
+                        period.periodOffset = min(0, period.periodOffset + 1)
                     }
                 }
             )
@@ -210,32 +218,6 @@ struct TransactionsView: View {
                 .onEnded { _ in withAnimation { showTaxTip.toggle() } }
             )
             .padding(.bottom, 8)
-
-            // Period navigation row
-            HStack {
-                Button {
-                    periodOffset -= 1
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                Text(periodLabel)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-                Button {
-                    periodOffset = min(0, periodOffset + 1)
-                } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(periodOffset < 0 ? .secondary : Color.secondary.opacity(0.3))
-                }
-                .disabled(periodOffset >= 0)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 6)
 
             Divider()
 
@@ -256,6 +238,37 @@ struct TransactionsView: View {
                 }
             )
         }
+        // Period picker sheets
+        .sheet(isPresented: $period.showMonthPicker) {
+            MonthPickerSheet(selectedMonth: $period.pickerMonth, isPresented: $period.showMonthPicker)
+                .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $period.showWeekPicker) {
+            WeekPickerSheet(selectedWeekStart: $period.pickerWeekStart, isPresented: $period.showWeekPicker)
+                .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $period.showCustomRangePicker) {
+            CustomDateRangeSheet(startDate: $period.customStart, endDate: $period.customEnd, isPresented: $period.showCustomRangePicker)
+                .presentationDetents([.medium])
+                .onDisappear { period.selectedRange = .custom }
+        }
+        .onChange(of: period.pickerWeekStart) { _, newMonday in
+            let cal = Calendar.current
+            let now = Date.now
+            let weekdayNow = cal.component(.weekday, from: now)
+            let offsetNow = (weekdayNow + 5) % 7
+            let thisMonday = cal.startOfDay(for: cal.date(byAdding: .day, value: -offsetNow, to: now)!)
+            let weeks = cal.dateComponents([.weekOfYear], from: thisMonday, to: newMonday).weekOfYear ?? 0
+            period.periodOffset = weeks
+        }
+        .onChange(of: period.pickerMonth) { _, newDate in
+            let cal = Calendar.current
+            let now = cal.date(from: cal.dateComponents([.year, .month], from: Date()))!
+            let chosen = cal.date(from: cal.dateComponents([.year, .month], from: newDate))!
+            let months = cal.dateComponents([.month], from: now, to: chosen).month ?? 0
+            period.periodOffset = min(0, months)
+        }
+        // Transaction edit sheet
         .sheet(item: $transactionToEdit) { tx in
             let cat = categories.first { $0.name == tx.categoryName }
             AddAmountView(
@@ -278,42 +291,18 @@ struct TransactionsView: View {
         } message: { tx in
             Text("\"\(tx.title)\" will be permanently deleted.")
         }
-        // Gasoline group delete — offer to delete just this one or all linked entries
+        // Gasoline group delete
         .alert("Delete Linked Transactions?", isPresented: $showDeleteGroupAlert, presenting: transactionToDelete) { tx in
             Button("Delete All Linked", role: .destructive) {
                 if let gid = tx.groupID {
-                    let linked = transactions.filter { $0.groupID == gid }
-                    linked.forEach { modelContext.delete($0) }
+                    transactions.filter { $0.groupID == gid }.forEach { modelContext.delete($0) }
                 }
             }
-            Button("Delete Only This One", role: .destructive) {
-                modelContext.delete(tx)
-            }
+            Button("Delete Only This One", role: .destructive) { modelContext.delete(tx) }
             Button("Cancel", role: .cancel) {}
         } message: { tx in
             let count = tx.groupID.map { gid in transactions.filter { $0.groupID == gid }.count } ?? 1
             Text("This fill-up was split into \(count) daily transactions. Delete all \(count), or just this one?")
-        }
-    }
-
-    // Human-readable label for the current period
-    var periodLabel: String {
-        let fmt = DateFormatter()
-        switch selectedRange {
-        case .day:
-            fmt.dateFormat = "MMM d, yyyy"
-            return fmt.string(from: currentPeriodStart)
-        case .week:
-            fmt.dateFormat = "MMM d"
-            let start = fmt.string(from: currentPeriodStart)
-            let end = fmt.string(from: Calendar.current.date(byAdding: .day, value: 6, to: currentPeriodStart)!)
-            return "\(start) – \(end)"
-        case .month:
-            fmt.dateFormat = "MMMM yyyy"
-            return fmt.string(from: currentPeriodStart)
-        case .year:
-            fmt.dateFormat = "yyyy"
-            return fmt.string(from: currentPeriodStart)
         }
     }
 }
@@ -365,52 +354,24 @@ struct CategoryFilterBar: View {
 }
 
 // ============================================================
-// MARK: - DateRangeTabs
-// ============================================================
-
-struct DateRangeTabs: View {
-    @Binding var selected: TransactionsView.DateRange
-    let onRangeChange: () -> Void
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(TransactionsView.DateRange.allCases, id: \.self) { range in
-                let isSelected = selected == range
-                Button {
-                    selected = range
-                    onRangeChange()
-                } label: {
-                    Text(range.rawValue)
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .foregroundColor(isSelected ? Color(UIColor.label) : Color(UIColor.secondaryLabel))
-                        .background(
-                            isSelected
-                                ? RoundedRectangle(cornerRadius: 7).fill(Color.secondary.opacity(0.2))
-                                : RoundedRectangle(cornerRadius: 7).fill(Color.clear)
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(3)
-        .background(Color(UIColor.systemGray6))
-        .cornerRadius(10)
-    }
-}
-
-// ============================================================
 // MARK: - SummaryCard
 // ============================================================
 
 struct SummaryCard: View {
     let title: String
     let amount: Double
+    let taxTipAmount: Double
     let isOutcome: Bool
+    let showTaxTip: Bool
+    var isNet: Bool = false
 
     var bgColor: Color {
-        isOutcome
+        if isNet {
+            return amount >= 0
+                ? Color(red: 0.831, green: 0.933, blue: 0.851)
+                : Color(red: 0.976, green: 0.863, blue: 0.863)
+        }
+        return isOutcome
             ? Color(red: 0.976, green: 0.863, blue: 0.863)
             : Color(red: 0.831, green: 0.933, blue: 0.851)
     }
@@ -420,15 +381,22 @@ struct SummaryCard: View {
             Text(title)
                 .font(.caption)
                 .foregroundColor(.secondary)
-            Text(String(format: "$%.2f", amount))
+            Text(String(format: "$%.2f", Swift.abs(amount)))
                 .font(.system(size: 18, weight: .semibold, design: .rounded))
                 .foregroundColor(.primary)
+            if showTaxTip && taxTipAmount != 0 {
+                Text(String(format: "+$%.2f tax", Swift.abs(taxTipAmount)))
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundColor(.secondary)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(bgColor)
         .cornerRadius(12)
+        .animation(.easeInOut(duration: 0.2), value: showTaxTip)
     }
 }
 

@@ -17,21 +17,30 @@ class Transaction {
     var categoryName: String
     var categorySymbol: String
     var currency: String
-    var projectCodesJSON: String = "[]"
     var isIncome: Bool          // true = income category (salary, freelance, etc.)
 
-    // Convenience computed property — not persisted, decodes/encodes projectCodesJSON
+    // Project code fields — directly stored, so renaming a ProjectCode cascades here.
+    var projectCode: String?        // top-level code, e.g. "PROJ-A"
+    var projectSubCode: String?     // sub-code under projectCode, e.g. "Q2-REVIEW"
+
+    // Backward-compat computed property used by older display/save code.
+    // Format: [] | [proj] | [proj, sub]
     var projectCodes: [String] {
         get {
-            (try? JSONDecoder().decode([String].self, from: projectCodesJSON.data(using: .utf8) ?? Data())) ?? []
+            if let p = projectCode {
+                return projectSubCode.map { [p, $0] } ?? [p]
+            }
+            return []
         }
         set {
-            if let data = try? JSONEncoder().encode(newValue),
-               let json = String(data: data, encoding: .utf8) {
-                projectCodesJSON = json
-            }
+            projectCode    = newValue.first
+            projectSubCode = newValue.count > 1 ? newValue[1] : nil
         }
     }
+
+    // Legacy JSON column — kept so SwiftData doesn't drop existing rows on schema change.
+    // Not used for reads or writes anymore; value is always "[]".
+    var projectCodesJSON: String = "[]"
 
     // MARK: - Base
     var baseAmount: Double      // price before tax and tip — always calculated automatically
@@ -100,13 +109,9 @@ class Transaction {
         self.categorySymbol = categorySymbol
         self.currency = currency
         self.isIncome = isIncome
-        // Encode project codes to JSON
-        if let data = try? JSONEncoder().encode(projectCodes),
-           let json = String(data: data, encoding: .utf8) {
-            self.projectCodesJSON = json
-        } else {
-            self.projectCodesJSON = "[]"
-        }
+        self.projectCode    = projectCodes.first
+        self.projectSubCode = projectCodes.count > 1 ? projectCodes[1] : nil
+        self.projectCodesJSON = "[]"
         self.taxable = taxable
         self.tippable = tippable
         self.availableTipRates = availableTipRates

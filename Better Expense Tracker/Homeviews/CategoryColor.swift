@@ -12,7 +12,7 @@ enum CategoryColor: String, CaseIterable, Codable {
         case .green:  return Color(#colorLiteral(red: 0.722, green: 0.886, blue: 0.592, alpha: 1))
         case .blue:   return Color(#colorLiteral(red: 0.475, green: 0.839, blue: 0.976, alpha: 1))
         case .yellow: return Color(#colorLiteral(red: 0.976, green: 0.851, blue: 0.549, alpha: 1))
-        case .purple: return Color(#colorLiteral(red: 0.5568627715, green: 0.3529411852, blue: 0.9686274529, alpha: 1))
+        case .purple: return Color(#colorLiteral(red: 0.7337217927, green: 0.5501794219, blue: 1, alpha: 1))
         case .orange: return Color(#colorLiteral(red: 0.957, green: 0.659, blue: 0.545, alpha: 1))
         case .gray:   return Color(UIColor.systemGray5)
         case .pink:   return Color(#colorLiteral(red: 0.984, green: 0.714, blue: 0.831, alpha: 1))
@@ -33,7 +33,7 @@ enum CategoryColor: String, CaseIterable, Codable {
         case .green:  return Color(#colorLiteral(red: 0.341, green: 0.624, blue: 0.169, alpha: 1))
         case .blue:   return Color(#colorLiteral(red: 0.176, green: 0.498, blue: 0.757, alpha: 1))
         case .yellow: return Color(#colorLiteral(red: 0.953, green: 0.686, blue: 0.133, alpha: 1))
-        case .purple: return Color(#colorLiteral(red: 0.365, green: 0.067, blue: 0.969, alpha: 1))
+        case .purple: return Color(#colorLiteral(red: 0.4941304326, green: 0.3133561611, blue: 0.8590021729, alpha: 1))
         case .orange: return Color(#colorLiteral(red: 0.941, green: 0.498, blue: 0.353, alpha: 1))
         case .gray:   return Color(UIColor.systemGray3)
         case .pink:   return Color(#colorLiteral(red: 0.910, green: 0.294, blue: 0.561, alpha: 1))
@@ -50,3 +50,28 @@ enum CategoryColor: String, CaseIterable, Codable {
 
     var displayName: String { rawValue.capitalized }
 }
+// MARK: - Currency formatter
+
+private let _currencyFormatter: NumberFormatter = {
+    let f = NumberFormatter()
+    f.numberStyle = .decimal
+    f.minimumFractionDigits = 2
+    f.maximumFractionDigits = 2
+    f.groupingSeparator = ","
+    f.decimalSeparator = "."
+    f.usesGroupingSeparator = true
+    return f
+}()
+
+/// Formats a dollar amount as "$XX,XXX.XX"
+func formatCurrency(_ amount: Double) -> String {
+    "$" + (_currencyFormatter.string(from: NSNumber(value: amount)) ?? String(format: "%.2f", amount))
+}
+
+/// Formats a signed net amount: "-$XX.XX" for negative (spending), "$XX.XX" for positive (income).
+func formatSignedCurrency(_ amount: Double) -> String {
+    let abs = Swift.abs(amount)
+    let formatted = "$" + (_currencyFormatter.string(from: NSNumber(value: abs)) ?? String(format: "%.2f", abs))
+    return amount < 0 ? "-" + formatted : formatted
+}
+

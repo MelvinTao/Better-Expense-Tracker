@@ -1,45 +1,5 @@
-//
-//  ContentView.swift
-//  Better Expense Tracker
-//
-//  Created by Melvin Tao on 2026-05-27.
-//
-
 import SwiftUI
 import SwiftData
-
-//struct ContentView: View {
-//    var body: some View {
-//        TabView{
-//            HomeView()
-//                .tabItem{
-//                    Label("Home",
-//                          systemImage: "dollarsign.bank.building.fill")
-//                }
-//            
-//            TransactionsView()
-//                .tabItem{
-//                    Label("Transactions",
-//                          systemImage: "calendar")
-//                }
-//            
-//            AnalysisView()
-//                .tabItem{
-//                    Label("Analysis",
-//                    systemImage: "chart.line.text.clipboard.fill")
-//                }
-//            
-//            SettingView()
-//                .tabItem{
-//                    Label("Setting",
-//                          systemImage: "gearshape.fill")
-//                }
-//                .labelStyle(.titleAndIcon)
-//            
-//                
-//        }
-//    }
-//}
 
 // ContentView is the main view of your app — it holds everything together.
 // Think of it as the "root" or "container" of your screen.
@@ -49,6 +9,9 @@ struct ContentView: View {
     // When it changes, the view automatically redraws itself.
     // This tracks WHICH tab is currently selected (0 = Home, 1 = Transactions, etc.)
     @State private var selectedTab = 0
+
+    /// Single source of truth for the date-range navigator shared across all main views.
+    @StateObject private var period = SharedPeriodState()
     
     // This is just a number we define once and reuse.
     // CGFloat is the number type used for sizes/positions in SwiftUI (like a decimal number).
@@ -76,12 +39,13 @@ struct ContentView: View {
                 case 0: HomeView()          // If selectedTab == 0, show HomeView
                 case 1: TransactionsView()  // If selectedTab == 1, show TransactionsView
                 case 2: ProjectView()
-                case 3: AnalysisView()      // If selectedTab == 3, show AnalysisView
+                case 3: Assetsview()      // If selectedTab == 3, show AnalysisView
                 case 4: SettingView()       // If selectedTab == 4, show SettingView
                 
                 default: HomeView()         // Fallback — Swift requires a 'default' case
                 }
             }
+            .environmentObject(period)
             // Makes the content fill the entire screen width and height.
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             
@@ -107,7 +71,7 @@ struct ContentView: View {
                 TabBarButton(icon: "folder.fill",
                              label: "Projects",
                              tag: 2, selected: $selectedTab)
-                TabBarButton(icon: "chart.line.text.clipboard.fill", label: "Analysis",    tag: 3, selected: $selectedTab)
+                TabBarButton(icon: "signature", label: "Assets",    tag: 3, selected: $selectedTab)
                 TabBarButton(icon: "gearshape.fill",                 label: "Setting",     tag: 4, selected: $selectedTab)
             }
             // Sets the tab bar to exactly your defined height.
@@ -198,7 +162,7 @@ struct ContentView_Preview: PreviewProvider {
     @MainActor
     static var previewContainer: ModelContainer {
         let container = try! ModelContainer(
-            for: Transaction.self, CategoryModel.self,
+            for: Transaction.self, CategoryModel.self, ProjectCode.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         let ctx = container.mainContext
@@ -236,7 +200,7 @@ struct ContentView_Preview: PreviewProvider {
             title: "Weekly groceries",
             amount: 68.43, date: ago(0, hour: 9, minute: 15),
             categoryName: "Grocery", categorySymbol: "basket.fill",
-            projectCodes: ["PROJ-A"], isIncome: false,
+            projectCodes: ["PROJ-A", "Q1-PLAN"], isIncome: false,
             taxable: true,
             taxRates: [TaxRate(name: "GST", rate: 0.05, amount: 0), TaxRate(name: "PST", rate: 0.07, amount: 0)]
         ))
@@ -252,7 +216,7 @@ struct ContentView_Preview: PreviewProvider {
             title: "Dinner with team",
             amount: 94.20, date: ago(1, hour: 19, minute: 30),
             categoryName: "Eat out", categorySymbol: "fork.knife",
-            projectCodes: ["PROJ-B", "Q2-Review"],
+            projectCodes: ["PROJ-B", "BACKEND"],
             isIncome: false,
             taxable: true,
             taxRates: [TaxRate(name: "GST", rate: 0.05, amount: 0)],
@@ -367,7 +331,7 @@ struct ContentView_Preview: PreviewProvider {
             title: "Freelance invoice #12",
             amount: 850.00, date: ago(3, hour: 11, minute: 0),
             categoryName: "Freelance", categorySymbol: "laptopcomputer",
-            projectCodes: ["CLI-2026-03"],
+            projectCodes: ["CLI-2026", "03"],
             isIncome: true
         ))
         ctx.insert(Transaction(
@@ -401,7 +365,7 @@ struct ContentView_Preview: PreviewProvider {
             title: "Flight YVR-YYZ",
             amount: 310.00, date: ago(7, hour: 6, minute: 45),
             categoryName: "Travel", categorySymbol: "airplane",
-            projectCodes: ["CONF-2026"],
+            projectCodes: ["CONF-2026", "TRAVEL"],
             isIncome: false,
             taxable: true,
             taxRates: [TaxRate(name: "GST", rate: 0.05, amount: 0)]
@@ -418,7 +382,7 @@ struct ContentView_Preview: PreviewProvider {
             title: "Freelance invoice #11",
             amount: 620.00, date: ago(10, hour: 14, minute: 0),
             categoryName: "Freelance", categorySymbol: "laptopcomputer",
-            projectCodes: ["CLI-2026-02"],
+            projectCodes: ["CLI-2026", "02"],
             isIncome: true
         ))
         ctx.insert(Transaction(
@@ -433,12 +397,22 @@ struct ContentView_Preview: PreviewProvider {
             title: "Weekend getaway hotel",
             amount: 245.60, date: ago(14, hour: 15, minute: 0),
             categoryName: "Travel", categorySymbol: "airplane",
-            projectCodes: ["PROJ-A", "Q2-Review"],
+            projectCodes: ["PROJ-A", "Q3-BUILD"],
             isIncome: false,
             taxable: true,
             taxRates: [TaxRate(name: "GST", rate: 0.05, amount: 0), TaxRate(name: "PST", rate: 0.07, amount: 0)],
             tippable: true, selectedTipRate: 0.12
         ))
+
+        // ── Project Codes ─────────────────────────────────────────
+        let projA = ProjectCode(name: "PROJ-A", sortOrder: 0, subCodes: ["Q1-PLAN", "Q2-REVIEW", "Q3-BUILD", "Q4-SHIP"])
+        let projB = ProjectCode(name: "PROJ-B", sortOrder: 1, subCodes: ["DESIGN", "FRONTEND", "BACKEND"])
+        let conf  = ProjectCode(name: "CONF-2026", sortOrder: 2, subCodes: ["TRAVEL", "LODGING", "MEALS"])
+        let cli   = ProjectCode(name: "CLI-2026", sortOrder: 3, subCodes: ["01", "02", "03", "04", "05"])
+        ctx.insert(projA)
+        ctx.insert(projB)
+        ctx.insert(conf)
+        ctx.insert(cli)
 
         return container
     }

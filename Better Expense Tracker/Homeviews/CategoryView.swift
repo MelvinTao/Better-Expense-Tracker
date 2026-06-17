@@ -117,10 +117,13 @@ struct CategoryButton: View {
                     .font(.system(size: tileWidth * 0.22))
                     .foregroundColor(colorScheme == .dark ? .black : .white)
                 Spacer()
-                Text("\(currencySymbol.symbol)\(categoryAmount, specifier: "%.2f")")
+                Text(formatCurrency(categoryAmount))
                     .font(.system(size: tileWidth * 0.16, design: .rounded))
                     .foregroundColor(Color.primary)
                     .bold()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.4)
+                    .frame(width: tileWidth * 0.88)
             }
             .frame(width: tileWidth, height: tileHeight * 0.85)
         }
